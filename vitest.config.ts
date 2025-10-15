@@ -11,5 +11,9 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
       exclude: ['dist/**', 'temp/**', '**/*.d.ts'],
     },
+    // Set LOG_LEVEL=silent for tests to avoid cluttering test output
+    env: {
+      LOG_LEVEL: 'silent',
+    },
   },
 });

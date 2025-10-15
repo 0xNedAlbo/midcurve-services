@@ -19,6 +19,9 @@ export * from './utils/index.js';
 // Export configuration
 export * from './config/index.js';
 
+// Export logging utilities
+export * from './logging/index.js';
+
 // Export clients
 export * from './clients/index.js';
 

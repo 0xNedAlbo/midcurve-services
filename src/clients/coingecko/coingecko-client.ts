@@ -11,6 +11,9 @@
  * - Address-based token lookup
  */
 
+import { createServiceLogger, log } from '../../logging/index.js';
+import type { ServiceLogger } from '../../logging/index.js';
+
 /**
  * CoinGecko token representation from the coins list API
  */
@@ -102,6 +105,7 @@ export class CoinGeckoClient {
   private tokensCache: CoinGeckoToken[] | null = null;
   private cacheExpiry: number = 0;
   private readonly cacheTimeout = 60 * 60 * 1000; // 1 hour
+  private readonly logger: ServiceLogger;
 
   /**
    * Map chain IDs to CoinGecko platform IDs
@@ -115,6 +119,10 @@ export class CoinGeckoClient {
     137: 'polygon-pos', // Polygon
     10: 'optimistic-ethereum', // Optimism
   };
+
+  constructor() {
+    this.logger = createServiceLogger('CoinGeckoClient');
+  }
 
   /**
    * Get singleton instance of CoinGeckoClient
@@ -144,26 +152,49 @@ export class CoinGeckoClient {
    * @throws CoinGeckoApiError if API request fails
    */
   async getAllTokens(): Promise<CoinGeckoToken[]> {
+    log.methodEntry(this.logger, 'getAllTokens');
+
     const now = Date.now();
 
     // Return cached data if valid
     if (this.tokensCache && now < this.cacheExpiry) {
+      log.cacheHit(this.logger, 'getAllTokens', 'tokens');
+      log.methodExit(this.logger, 'getAllTokens', {
+        count: this.tokensCache.length,
+      });
       return this.tokensCache;
     }
 
+    log.cacheMiss(this.logger, 'getAllTokens', 'tokens');
+
     try {
+      log.externalApiCall(
+        this.logger,
+        'CoinGecko',
+        '/coins/list',
+        { include_platform: true }
+      );
+
       const response = await fetch(
         `${this.baseUrl}/coins/list?include_platform=true`
       );
 
       if (!response.ok) {
-        throw new CoinGeckoApiError(
+        const error = new CoinGeckoApiError(
           `CoinGecko API error: ${response.status} ${response.statusText}`,
           response.status
         );
+        log.methodError(this.logger, 'getAllTokens', error, {
+          statusCode: response.status,
+        });
+        throw error;
       }
 
       const allTokens = (await response.json()) as CoinGeckoToken[];
+      this.logger.debug(
+        { totalTokens: allTokens.length },
+        'Received tokens from CoinGecko API'
+      );
 
       // Filter to only include tokens on supported chains
       const supportedPlatformIds = Object.values(this.chainIdToPlatformId);
@@ -175,14 +206,29 @@ export class CoinGeckoClient {
         );
       });
 
+      this.logger.info(
+        {
+          totalTokens: allTokens.length,
+          filteredTokens: filteredTokens.length,
+        },
+        'Filtered tokens for supported chains'
+      );
+
       // Update cache
       this.tokensCache = filteredTokens;
       this.cacheExpiry = now + this.cacheTimeout;
 
+      log.methodExit(this.logger, 'getAllTokens', {
+        count: filteredTokens.length,
+      });
       return filteredTokens;
     } catch (error) {
       // If we have stale cached data and API fails, return cached data
       if (this.tokensCache) {
+        this.logger.warn(
+          { cachedCount: this.tokensCache.length },
+          'Returning stale cached data due to API error'
+        );
         return this.tokensCache;
       }
 
@@ -192,11 +238,13 @@ export class CoinGeckoClient {
       }
 
       // Wrap other errors
-      throw new CoinGeckoApiError(
+      const wrappedError = new CoinGeckoApiError(
         `Failed to fetch tokens from CoinGecko: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
+      log.methodError(this.logger, 'getAllTokens', wrappedError);
+      throw wrappedError;
     }
   }
 
@@ -212,10 +260,19 @@ export class CoinGeckoClient {
     chainId: number,
     address: string
   ): Promise<string | null> {
+    log.methodEntry(this.logger, 'findCoinByAddress', {
+      chainId,
+      address,
+    });
+
     const tokens = await this.getAllTokens();
     const platformId = this.chainIdToPlatformId[chainId];
 
     if (!platformId) {
+      this.logger.debug({ chainId }, 'Chain not supported');
+      log.methodExit(this.logger, 'findCoinByAddress', {
+        found: false,
+      });
       return null;
     }
 
@@ -226,6 +283,18 @@ export class CoinGeckoClient {
         token.platforms[platformId].toLowerCase() === normalizedAddress
     );
 
+    if (token) {
+      this.logger.debug(
+        { chainId, address, coinId: token.id },
+        'Token found in CoinGecko'
+      );
+    } else {
+      this.logger.debug({ chainId, address }, 'Token not found in CoinGecko');
+    }
+
+    log.methodExit(this.logger, 'findCoinByAddress', {
+      coinId: token?.id || null,
+    });
     return token ? token.id : null;
   }
 
@@ -237,19 +306,38 @@ export class CoinGeckoClient {
    * @throws CoinGeckoApiError if API request fails or coin not found
    */
   async getCoinDetails(coinId: string): Promise<CoinGeckoDetailedCoin> {
+    log.methodEntry(this.logger, 'getCoinDetails', { coinId });
+
     try {
+      log.externalApiCall(this.logger, 'CoinGecko', `/coins/${coinId}`, {
+        market_data: true,
+      });
+
       const response = await fetch(
         `${this.baseUrl}/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`
       );
 
       if (!response.ok) {
-        throw new CoinGeckoApiError(
+        const error = new CoinGeckoApiError(
           `CoinGecko API error: ${response.status} ${response.statusText}`,
           response.status
         );
+        log.methodError(this.logger, 'getCoinDetails', error, {
+          coinId,
+          statusCode: response.status,
+        });
+        throw error;
       }
 
       const coin = (await response.json()) as CoinGeckoDetailedCoin;
+      this.logger.debug(
+        { coinId, symbol: coin.symbol, name: coin.name },
+        'Retrieved coin details'
+      );
+
+      log.methodExit(this.logger, 'getCoinDetails', {
+        coinId: coin.id,
+      });
       return coin;
     } catch (error) {
       // Re-throw CoinGeckoApiError
@@ -258,11 +346,15 @@ export class CoinGeckoClient {
       }
 
       // Wrap other errors
-      throw new CoinGeckoApiError(
+      const wrappedError = new CoinGeckoApiError(
         `Failed to fetch coin details for ${coinId}: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
+      log.methodError(this.logger, 'getCoinDetails', wrappedError, {
+        coinId,
+      });
+      throw wrappedError;
     }
   }
 
@@ -293,31 +385,78 @@ export class CoinGeckoClient {
     chainId: number,
     address: string
   ): Promise<EnrichmentData> {
-    // Find coin ID by address
-    const coinId = await this.findCoinByAddress(chainId, address);
+    log.methodEntry(this.logger, 'getErc20EnrichmentData', {
+      chainId,
+      address,
+    });
 
-    if (!coinId) {
-      throw new TokenNotFoundInCoinGeckoError(chainId, address);
-    }
+    try {
+      // Find coin ID by address
+      const coinId = await this.findCoinByAddress(chainId, address);
 
-    // Fetch detailed coin information
-    const coinDetails = await this.getCoinDetails(coinId);
+      if (!coinId) {
+        const error = new TokenNotFoundInCoinGeckoError(chainId, address);
+        log.methodError(
+          this.logger,
+          'getErc20EnrichmentData',
+          error,
+          { chainId, address }
+        );
+        throw error;
+      }
 
-    // Validate market cap data
-    const marketCapUsd = coinDetails.market_data?.market_cap?.usd;
-    if (!marketCapUsd || marketCapUsd <= 0) {
-      throw new CoinGeckoApiError(
-        `Market cap data not available for ${coinId}`
+      this.logger.info(
+        { chainId, address, coinId },
+        'Found token in CoinGecko, fetching enrichment data'
       );
-    }
 
-    return {
-      coingeckoId: coinId,
-      logoUrl: coinDetails.image.small,
-      marketCap: marketCapUsd,
-      symbol: coinDetails.symbol.toUpperCase(),
-      name: coinDetails.name,
-    };
+      // Fetch detailed coin information
+      const coinDetails = await this.getCoinDetails(coinId);
+
+      // Validate market cap data
+      const marketCapUsd = coinDetails.market_data?.market_cap?.usd;
+      if (!marketCapUsd || marketCapUsd <= 0) {
+        const error = new CoinGeckoApiError(
+          `Market cap data not available for ${coinId}`
+        );
+        log.methodError(
+          this.logger,
+          'getErc20EnrichmentData',
+          error,
+          { coinId, chainId, address }
+        );
+        throw error;
+      }
+
+      const enrichmentData = {
+        coingeckoId: coinId,
+        logoUrl: coinDetails.image.small,
+        marketCap: marketCapUsd,
+        symbol: coinDetails.symbol.toUpperCase(),
+        name: coinDetails.name,
+      };
+
+      this.logger.info(
+        {
+          chainId,
+          address,
+          coingeckoId: enrichmentData.coingeckoId,
+          symbol: enrichmentData.symbol,
+          marketCap: enrichmentData.marketCap,
+        },
+        'Successfully enriched token data'
+      );
+
+      log.methodExit(this.logger, 'getErc20EnrichmentData', {
+        coingeckoId: enrichmentData.coingeckoId,
+      });
+
+      return enrichmentData;
+    } catch (error) {
+      // Errors are already logged by log.methodError in the try block
+      // or by the called methods. Just re-throw.
+      throw error;
+    }
   }
 
   /**

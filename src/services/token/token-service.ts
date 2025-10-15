@@ -8,6 +8,8 @@
 import { PrismaClient } from '@prisma/client';
 import type { AnyToken } from '../../shared/types/token-config.js';
 import type { CreateAnyTokenInput } from '../types/token/token-input.js';
+import { createServiceLogger, log } from '../../logging/index.js';
+import type { ServiceLogger } from '../../logging/index.js';
 
 /**
  * Dependencies for TokenService
@@ -29,6 +31,7 @@ export interface TokenServiceDependencies {
  */
 export class TokenService {
   private readonly _prisma: PrismaClient;
+  private readonly logger: ServiceLogger;
 
   /**
    * Creates a new TokenService instance
@@ -38,6 +41,7 @@ export class TokenService {
    */
   constructor(dependencies: TokenServiceDependencies = {}) {
     this._prisma = dependencies.prisma ?? new PrismaClient();
+    this.logger = createServiceLogger('TokenService');
   }
 
   /**
@@ -54,31 +58,63 @@ export class TokenService {
    * @returns The created token with generated id and timestamps
    */
   async create(input: CreateAnyTokenInput): Promise<AnyToken> {
-    const result = await this.prisma.token.create({
-      data: {
-        tokenType: input.tokenType,
-        name: input.name,
-        symbol: input.symbol,
-        decimals: input.decimals,
-        logoUrl: input.logoUrl,
-        coingeckoId: input.coingeckoId,
-        marketCap: input.marketCap,
-        config: input.config as object,
-      },
+    log.methodEntry(this.logger, 'create', {
+      tokenType: input.tokenType,
+      symbol: input.symbol,
+      name: input.name,
     });
 
-    return {
-      id: result.id,
-      createdAt: result.createdAt,
-      updatedAt: result.updatedAt,
-      tokenType: result.tokenType as AnyToken['tokenType'],
-      name: result.name,
-      symbol: result.symbol,
-      decimals: result.decimals,
-      logoUrl: result.logoUrl ?? undefined,
-      coingeckoId: result.coingeckoId ?? undefined,
-      marketCap: result.marketCap ?? undefined,
-      config: result.config as unknown as AnyToken['config'],
-    };
+    try {
+      log.dbOperation(this.logger, 'create', 'Token', {
+        tokenType: input.tokenType,
+        symbol: input.symbol,
+      });
+
+      const result = await this.prisma.token.create({
+        data: {
+          tokenType: input.tokenType,
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: input.logoUrl,
+          coingeckoId: input.coingeckoId,
+          marketCap: input.marketCap,
+          config: input.config as object,
+        },
+      });
+
+      const token: AnyToken = {
+        id: result.id,
+        createdAt: result.createdAt,
+        updatedAt: result.updatedAt,
+        tokenType: result.tokenType as AnyToken['tokenType'],
+        name: result.name,
+        symbol: result.symbol,
+        decimals: result.decimals,
+        logoUrl: result.logoUrl ?? undefined,
+        coingeckoId: result.coingeckoId ?? undefined,
+        marketCap: result.marketCap ?? undefined,
+        config: result.config as unknown as AnyToken['config'],
+      };
+
+      this.logger.info(
+        {
+          id: token.id,
+          tokenType: token.tokenType,
+          symbol: token.symbol,
+          name: token.name,
+        },
+        'Token created successfully'
+      );
+
+      log.methodExit(this.logger, 'create', { id: token.id });
+      return token;
+    } catch (error) {
+      log.methodError(this.logger, 'create', error as Error, {
+        tokenType: input.tokenType,
+        symbol: input.symbol,
+      });
+      throw error;
+    }
   }
 }
