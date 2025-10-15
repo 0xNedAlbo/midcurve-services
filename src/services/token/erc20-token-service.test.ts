@@ -34,6 +34,1119 @@ describe('Erc20TokenService', () => {
   });
 
   // ==========================================================================
+  // Create Tests
+  // ==========================================================================
+
+  describe('create', () => {
+    describe('successful creation', () => {
+      it('should create new token with valid data', async () => {
+        const { input, dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token doesn't exist (duplicate check)
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Token creation
+        prismaMock.token.create.mockResolvedValue(dbResult);
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify
+        expect(result.name).toBe('USD Coin');
+        expect(result.symbol).toBe('USDC');
+        expect(result.decimals).toBe(6);
+        expect(result.config.address).toBe(
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+        );
+        expect(result.config.chainId).toBe(1);
+
+        // Verify duplicate check was performed
+        expect(prismaMock.token.findFirst).toHaveBeenCalledTimes(1);
+
+        // Verify token was created
+        expect(prismaMock.token.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('should return existing token when duplicate found', async () => {
+        const { input, dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token already exists
+        prismaMock.token.findFirst.mockResolvedValue(dbResult);
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify
+        expect(result.id).toBe(dbResult.id);
+        expect(result.symbol).toBe('USDC');
+
+        // Verify duplicate check was performed
+        expect(prismaMock.token.findFirst).toHaveBeenCalledTimes(1);
+
+        // Verify no new token was created
+        expect(prismaMock.token.create).not.toHaveBeenCalled();
+      });
+
+      it('should normalize lowercase address', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test Token',
+          symbol: 'TEST',
+          decimals: 18,
+          config: {
+            address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // lowercase
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_test',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: {
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // normalized
+            chainId: 1,
+          },
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify address was normalized
+        expect(result.config.address).toBe(
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+        );
+      });
+
+      it('should normalize mixed case address', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test Token',
+          symbol: 'TEST',
+          decimals: 18,
+          config: {
+            address: '0xa0B86991c6218b36c1d19d4A2e9Eb0cE3606eB48', // mixed case (not proper checksum)
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_test',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: {
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // normalized
+            chainId: 1,
+          },
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify address was normalized
+        expect(result.config.address).toBe(
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+        );
+      });
+
+      it('should handle optional fields', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test Token',
+          symbol: 'TEST',
+          decimals: 18,
+          logoUrl: 'https://example.com/logo.png',
+          coingeckoId: 'test-token',
+          marketCap: 1000000,
+          config: {
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_test',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: input.logoUrl,
+          coingeckoId: input.coingeckoId,
+          marketCap: input.marketCap,
+          config: input.config,
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify optional fields
+        expect(result.logoUrl).toBe('https://example.com/logo.png');
+        expect(result.coingeckoId).toBe('test-token');
+        expect(result.marketCap).toBe(1000000);
+      });
+
+      it('should allow same address on different chains', async () => {
+        const inputEth = {
+          tokenType: 'evm-erc20' as const,
+          name: 'USDC',
+          symbol: 'USDC',
+          decimals: 6,
+          config: {
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            chainId: 1, // Ethereum
+          },
+        };
+
+        const inputArb = {
+          ...inputEth,
+          config: {
+            ...inputEth.config,
+            chainId: 42161, // Arbitrum
+          },
+        };
+
+        // Mock: No duplicate for Arbitrum (even though Ethereum exists)
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_usdc_arb',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: inputArb.name,
+          symbol: inputArb.symbol,
+          decimals: inputArb.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: inputArb.config,
+        });
+
+        // Execute
+        const result = await service.create(inputArb);
+
+        // Verify different chain allowed
+        expect(result.config.chainId).toBe(42161);
+      });
+
+      it('should handle tokens with special characters', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Token 中文 🚀',
+          symbol: '$MEME',
+          decimals: 18,
+          config: {
+            address: '0x8888888888888888888888888888888888888888',
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_special',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: input.config,
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify special characters preserved
+        expect(result.name).toBe('Token 中文 🚀');
+        expect(result.symbol).toBe('$MEME');
+      });
+    });
+
+    describe('validation errors', () => {
+      it('should throw error for invalid address format', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test',
+          symbol: 'TEST',
+          decimals: 18,
+          config: {
+            address: 'invalid-address',
+            chainId: 1,
+          },
+        };
+
+        await expect(service.create(input)).rejects.toThrow(
+          'Invalid Ethereum address format'
+        );
+
+        // Should fail before DB operations
+        expect(prismaMock.token.findFirst).not.toHaveBeenCalled();
+        expect(prismaMock.token.create).not.toHaveBeenCalled();
+      });
+
+      it('should throw error for too short address', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test',
+          symbol: 'TEST',
+          decimals: 18,
+          config: {
+            address: '0x123',
+            chainId: 1,
+          },
+        };
+
+        await expect(service.create(input)).rejects.toThrow(
+          'Invalid Ethereum address format'
+        );
+      });
+
+      it('should throw error for address without 0x prefix', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Test',
+          symbol: 'TEST',
+          decimals: 18,
+          config: {
+            address: 'A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            chainId: 1,
+          },
+        };
+
+        await expect(service.create(input)).rejects.toThrow(
+          'Invalid Ethereum address format'
+        );
+      });
+    });
+
+    describe('edge cases', () => {
+      it('should handle zero decimals', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Zero Decimals',
+          symbol: 'ZERO',
+          decimals: 0,
+          config: {
+            address: '0xcccccccccccccccccccccccccccccccccccccccc',
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_zero',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: input.config,
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify
+        expect(result.decimals).toBe(0);
+      });
+
+      it('should handle high decimals', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'High Decimals',
+          symbol: 'HIGH',
+          decimals: 77,
+          config: {
+            address: '0xdddddddddddddddddddddddddddddddddddddddd',
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_high',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: input.config,
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify
+        expect(result.decimals).toBe(77);
+      });
+
+      it('should handle zero marketCap', async () => {
+        const input = {
+          tokenType: 'evm-erc20' as const,
+          name: 'Zero MarketCap',
+          symbol: 'ZMC',
+          decimals: 18,
+          marketCap: 0,
+          config: {
+            address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            chainId: 1,
+          },
+        };
+
+        // Mock: No duplicate
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Mock: Creation
+        prismaMock.token.create.mockResolvedValue({
+          id: 'token_zmc',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: input.name,
+          symbol: input.symbol,
+          decimals: input.decimals,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: input.marketCap,
+          config: input.config,
+        });
+
+        // Execute
+        const result = await service.create(input);
+
+        // Verify
+        expect(result.marketCap).toBe(0);
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Find By Address and Chain Tests
+  // ==========================================================================
+
+  describe('findByAddressAndChain', () => {
+    describe('successful queries', () => {
+      it('should find existing token', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findFirst.mockResolvedValue(dbResult);
+
+        // Execute
+        const result = await service.findByAddressAndChain(
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          1
+        );
+
+        // Verify
+        expect(result).not.toBeNull();
+        expect(result?.symbol).toBe('USDC');
+        expect(result?.config.chainId).toBe(1);
+
+        // Verify query was made
+        expect(prismaMock.token.findFirst).toHaveBeenCalledTimes(1);
+      });
+
+      it('should return null when token not found', async () => {
+        // Mock: Token doesn't exist
+        prismaMock.token.findFirst.mockResolvedValue(null);
+
+        // Execute
+        const result = await service.findByAddressAndChain(
+          '0x9999999999999999999999999999999999999999',
+          1
+        );
+
+        // Verify
+        expect(result).toBeNull();
+      });
+
+      it('should normalize lowercase address', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findFirst.mockResolvedValue(dbResult);
+
+        // Execute with lowercase address
+        await service.findByAddressAndChain(
+          '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+          1
+        );
+
+        // Verify query used normalized address
+        expect(prismaMock.token.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              config: expect.objectContaining({
+                path: ['address'],
+                equals: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+              }),
+            }),
+          })
+        );
+      });
+
+      it('should normalize mixed case address', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findFirst.mockResolvedValue(dbResult);
+
+        // Execute with mixed case address (not proper checksum)
+        await service.findByAddressAndChain(
+          '0xa0B86991c6218b36c1d19d4A2e9Eb0cE3606eB48',
+          1
+        );
+
+        // Verify query used normalized address
+        expect(prismaMock.token.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              config: expect.objectContaining({
+                path: ['address'],
+                equals: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+              }),
+            }),
+          })
+        );
+      });
+
+      it('should distinguish between different chains', async () => {
+        // Mock: Token exists on Ethereum
+        prismaMock.token.findFirst.mockResolvedValue({
+          id: 'token_usdc_eth',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'evm-erc20',
+          name: 'USDC',
+          symbol: 'USDC',
+          decimals: 6,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: {
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            chainId: 1,
+          },
+        });
+
+        // Execute
+        const result = await service.findByAddressAndChain(
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          1 // Ethereum
+        );
+
+        // Verify
+        expect(result?.config.chainId).toBe(1);
+
+        // Verify query included chainId filter
+        expect(prismaMock.token.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              AND: expect.objectContaining({
+                config: expect.objectContaining({
+                  path: ['chainId'],
+                  equals: 1,
+                }),
+              }),
+            }),
+          })
+        );
+      });
+    });
+
+    describe('validation errors', () => {
+      it('should throw error for invalid address format', async () => {
+        await expect(
+          service.findByAddressAndChain('invalid-address', 1)
+        ).rejects.toThrow('Invalid Ethereum address format');
+
+        // Should fail before DB query
+        expect(prismaMock.token.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('should throw error for too short address', async () => {
+        await expect(
+          service.findByAddressAndChain('0x123', 1)
+        ).rejects.toThrow('Invalid Ethereum address format');
+      });
+
+      it('should throw error for address without 0x prefix', async () => {
+        await expect(
+          service.findByAddressAndChain(
+            'A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            1
+          )
+        ).rejects.toThrow('Invalid Ethereum address format');
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Find By ID Tests
+  // ==========================================================================
+
+  describe('findById', () => {
+    it('should find existing ERC-20 token', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // Mock: Token exists
+      prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+      // Execute
+      const result = await service.findById('token_usdc_eth_001');
+
+      // Verify
+      expect(result).not.toBeNull();
+      expect(result?.symbol).toBe('USDC');
+      expect(result?.tokenType).toBe('evm-erc20');
+    });
+
+    it('should return null when token not found', async () => {
+      // Mock: Token doesn't exist
+      prismaMock.token.findUnique.mockResolvedValue(null);
+
+      // Execute
+      const result = await service.findById('nonexistent_token');
+
+      // Verify
+      expect(result).toBeNull();
+    });
+
+    it('should return null when token is not ERC-20', async () => {
+      // Mock: Token exists but is Solana SPL type
+      prismaMock.token.findUnique.mockResolvedValue({
+        id: 'token_sol_001',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        tokenType: 'solana-spl', // Not ERC-20!
+        name: 'Wrapped SOL',
+        symbol: 'SOL',
+        decimals: 9,
+        logoUrl: null,
+        coingeckoId: null,
+        marketCap: null,
+        config: {
+          mint: 'So11111111111111111111111111111111111111112',
+        },
+      });
+
+      // Execute
+      const result = await service.findById('token_sol_001');
+
+      // Verify: Returns null because it's not ERC-20
+      expect(result).toBeNull();
+    });
+
+    it('should include all token fields', async () => {
+      // Mock: Token with optional fields
+      prismaMock.token.findUnique.mockResolvedValue({
+        id: 'token_complete',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-01-02'),
+        tokenType: 'evm-erc20',
+        name: 'Complete Token',
+        symbol: 'COMP',
+        decimals: 18,
+        logoUrl: 'https://example.com/logo.png',
+        coingeckoId: 'complete-token',
+        marketCap: 5000000,
+        config: {
+          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          chainId: 1,
+        },
+      });
+
+      // Execute
+      const result = await service.findById('token_complete');
+
+      // Verify all fields
+      expect(result?.id).toBe('token_complete');
+      expect(result?.name).toBe('Complete Token');
+      expect(result?.symbol).toBe('COMP');
+      expect(result?.decimals).toBe(18);
+      expect(result?.logoUrl).toBe('https://example.com/logo.png');
+      expect(result?.coingeckoId).toBe('complete-token');
+      expect(result?.marketCap).toBe(5000000);
+      expect(result?.config.address).toBe(
+        '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+      );
+      expect(result?.config.chainId).toBe(1);
+    });
+
+    it('should handle tokens without optional fields', async () => {
+      // Mock: Token without optional fields
+      prismaMock.token.findUnique.mockResolvedValue({
+        id: 'token_minimal',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        tokenType: 'evm-erc20',
+        name: 'Minimal Token',
+        symbol: 'MIN',
+        decimals: 18,
+        logoUrl: null,
+        coingeckoId: null,
+        marketCap: null,
+        config: {
+          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          chainId: 1,
+        },
+      });
+
+      // Execute
+      const result = await service.findById('token_minimal');
+
+      // Verify optional fields are undefined
+      expect(result?.logoUrl).toBeUndefined();
+      expect(result?.coingeckoId).toBeUndefined();
+      expect(result?.marketCap).toBeUndefined();
+    });
+
+    it('should map dates correctly', async () => {
+      const createdDate = new Date('2024-01-01T10:00:00Z');
+      const updatedDate = new Date('2024-01-02T15:30:00Z');
+
+      // Mock: Token with specific dates
+      prismaMock.token.findUnique.mockResolvedValue({
+        id: 'token_dates',
+        createdAt: createdDate,
+        updatedAt: updatedDate,
+        tokenType: 'evm-erc20',
+        name: 'Date Token',
+        symbol: 'DATE',
+        decimals: 18,
+        logoUrl: null,
+        coingeckoId: null,
+        marketCap: null,
+        config: {
+          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          chainId: 1,
+        },
+      });
+
+      // Execute
+      const result = await service.findById('token_dates');
+
+      // Verify dates
+      expect(result?.createdAt).toEqual(createdDate);
+      expect(result?.updatedAt).toEqual(updatedDate);
+    });
+  });
+
+  // ==========================================================================
+  // Update Tests
+  // ==========================================================================
+
+  describe('update', () => {
+    describe('successful updates', () => {
+      it('should update basic fields', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        // Mock: Update succeeds
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          name: 'USD Coin Updated',
+          symbol: 'USDC2',
+        });
+
+        // Execute
+        const result = await service.update('token_usdc_eth_001', {
+          name: 'USD Coin Updated',
+          symbol: 'USDC2',
+        });
+
+        // Verify
+        expect(result.name).toBe('USD Coin Updated');
+        expect(result.symbol).toBe('USDC2');
+
+        // Verify update was called
+        expect(prismaMock.token.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('should update optional fields', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        // Mock: Update succeeds
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          logoUrl: 'https://example.com/new-logo.png',
+          coingeckoId: 'usdc-updated',
+          marketCap: 35000000000,
+        });
+
+        // Execute
+        const result = await service.update('token_usdc_eth_001', {
+          logoUrl: 'https://example.com/new-logo.png',
+          coingeckoId: 'usdc-updated',
+          marketCap: 35000000000,
+        });
+
+        // Verify
+        expect(result.logoUrl).toBe('https://example.com/new-logo.png');
+        expect(result.coingeckoId).toBe('usdc-updated');
+        expect(result.marketCap).toBe(35000000000);
+      });
+
+      it('should update address with normalization', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        const newAddress = '0xdac17f958d2ee523a2206206994597c13d831ec7'; // lowercase
+
+        // Mock: Update succeeds
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          config: {
+            address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // normalized
+            chainId: 1,
+          },
+        });
+
+        // Execute
+        const result = await service.update('token_usdc_eth_001', {
+          config: {
+            address: newAddress,
+            chainId: 1,
+          },
+        });
+
+        // Verify address was normalized
+        expect(result.config.address).toBe(
+          '0xdAC17F958D2ee523a2206206994597C13D831ec7'
+        );
+      });
+
+      it('should update chainId in config', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        // Mock: Update succeeds
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          config: {
+            address: dbResult.config.address,
+            chainId: 42161, // Arbitrum
+          },
+        });
+
+        // Execute
+        const result = await service.update('token_usdc_eth_001', {
+          config: {
+            address: dbResult.config.address,
+            chainId: 42161,
+          },
+        });
+
+        // Verify
+        expect(result.config.chainId).toBe(42161);
+      });
+
+      it('should handle partial updates', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        // Mock: Update only name
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          name: 'Updated Name Only',
+        });
+
+        // Execute (only update name)
+        const result = await service.update('token_usdc_eth_001', {
+          name: 'Updated Name Only',
+        });
+
+        // Verify only name changed
+        expect(result.name).toBe('Updated Name Only');
+        expect(result.symbol).toBe('USDC'); // Unchanged
+        expect(result.decimals).toBe(6); // Unchanged
+      });
+
+      it('should update multiple fields at once', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        // Mock: Update multiple fields
+        prismaMock.token.update.mockResolvedValue({
+          ...dbResult,
+          name: 'New Name',
+          symbol: 'NEW',
+          decimals: 18,
+          logoUrl: 'https://example.com/logo.png',
+          marketCap: 999999,
+        });
+
+        // Execute
+        const result = await service.update('token_usdc_eth_001', {
+          name: 'New Name',
+          symbol: 'NEW',
+          decimals: 18,
+          logoUrl: 'https://example.com/logo.png',
+          marketCap: 999999,
+        });
+
+        // Verify all updated
+        expect(result.name).toBe('New Name');
+        expect(result.symbol).toBe('NEW');
+        expect(result.decimals).toBe(18);
+        expect(result.logoUrl).toBe('https://example.com/logo.png');
+        expect(result.marketCap).toBe(999999);
+      });
+    });
+
+    describe('validation errors', () => {
+      it('should throw error when token not found', async () => {
+        // Mock: Token doesn't exist
+        prismaMock.token.findUnique.mockResolvedValue(null);
+
+        await expect(
+          service.update('nonexistent_token', { name: 'New Name' })
+        ).rejects.toThrow('Token with id nonexistent_token not found');
+
+        // Verify update was not attempted
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error when token is not ERC-20', async () => {
+        // Mock: Token exists but is Solana type
+        prismaMock.token.findUnique.mockResolvedValue({
+          id: 'token_sol_001',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'solana-spl', // Not ERC-20!
+          name: 'Wrapped SOL',
+          symbol: 'SOL',
+          decimals: 9,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: {
+            mint: 'So11111111111111111111111111111111111111112',
+          },
+        });
+
+        await expect(
+          service.update('token_sol_001', { name: 'New Name' })
+        ).rejects.toThrow('is not an ERC-20 token');
+
+        // Verify update was not attempted
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error for invalid address in config update', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        await expect(
+          service.update('token_usdc_eth_001', {
+            config: {
+              address: 'invalid-address',
+              chainId: 1,
+            },
+          })
+        ).rejects.toThrow('Invalid Ethereum address format');
+
+        // Verify update was not attempted
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error for too short address in config update', async () => {
+        const { dbResult } = USDC_ETHEREUM;
+
+        // Mock: Token exists
+        prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+        await expect(
+          service.update('token_usdc_eth_001', {
+            config: {
+              address: '0x123',
+              chainId: 1,
+            },
+          })
+        ).rejects.toThrow('Invalid Ethereum address format');
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Delete Tests
+  // ==========================================================================
+
+  describe('delete', () => {
+    it('should delete existing ERC-20 token', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // Mock: Token exists
+      prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+      // Mock: Delete succeeds
+      prismaMock.token.delete.mockResolvedValue(dbResult);
+
+      // Execute
+      await service.delete('token_usdc_eth_001');
+
+      // Verify delete was called
+      expect(prismaMock.token.delete).toHaveBeenCalledWith({
+        where: { id: 'token_usdc_eth_001' },
+      });
+    });
+
+    it('should throw error when token not found', async () => {
+      // Mock: Token doesn't exist
+      prismaMock.token.findUnique.mockResolvedValue(null);
+
+      await expect(service.delete('nonexistent_token')).rejects.toThrow(
+        'Token with id nonexistent_token not found'
+      );
+
+      // Verify delete was not attempted
+      expect(prismaMock.token.delete).not.toHaveBeenCalled();
+    });
+
+    it('should throw error when token is not ERC-20', async () => {
+      // Mock: Token exists but is Solana type
+      prismaMock.token.findUnique.mockResolvedValue({
+        id: 'token_sol_001',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        tokenType: 'solana-spl', // Not ERC-20!
+        name: 'Wrapped SOL',
+        symbol: 'SOL',
+        decimals: 9,
+        logoUrl: null,
+        coingeckoId: null,
+        marketCap: null,
+        config: {
+          mint: 'So11111111111111111111111111111111111111112',
+        },
+      });
+
+      await expect(service.delete('token_sol_001')).rejects.toThrow(
+        'is not an ERC-20 token'
+      );
+
+      // Verify delete was not attempted
+      expect(prismaMock.token.delete).not.toHaveBeenCalled();
+    });
+
+    it('should verify token type before deletion', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // Mock: Token exists and is ERC-20
+      prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+      // Mock: Delete succeeds
+      prismaMock.token.delete.mockResolvedValue(dbResult);
+
+      // Execute
+      await service.delete('token_usdc_eth_001');
+
+      // Verify existence check was performed first
+      expect(prismaMock.token.findUnique).toHaveBeenCalledWith({
+        where: { id: 'token_usdc_eth_001' },
+      });
+    });
+
+    it('should not return anything on successful deletion', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // Mock: Token exists
+      prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+      // Mock: Delete succeeds
+      prismaMock.token.delete.mockResolvedValue(dbResult);
+
+      // Execute
+      const result = await service.delete('token_usdc_eth_001');
+
+      // Verify returns void (undefined)
+      expect(result).toBeUndefined();
+    });
+
+    it('should handle deletion with all safeguards', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // Mock: Token exists and is ERC-20
+      prismaMock.token.findUnique.mockResolvedValue(dbResult);
+
+      // Mock: Delete succeeds
+      prismaMock.token.delete.mockResolvedValue(dbResult);
+
+      // Execute
+      await service.delete('token_usdc_eth_001');
+
+      // Verify both checks were performed
+      expect(prismaMock.token.findUnique).toHaveBeenCalledTimes(1);
+      expect(prismaMock.token.delete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ==========================================================================
   // Token Discovery Tests
   // ==========================================================================
 
