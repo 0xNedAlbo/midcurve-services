@@ -16,6 +16,9 @@ export * from './shared/types/index.js';
 // Export utilities
 export * from './utils/index.js';
 
+// Export configuration
+export * from './config/index.js';
+
 // Export services here as they are implemented
 // Example:
 // export * from './services/position-service.js';

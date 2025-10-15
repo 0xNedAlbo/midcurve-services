@@ -338,12 +338,18 @@ midcurve-services/
 │   │       │   └── pool.ts        # UniswapV3 Config/State/Pool
 │   │       └── index.ts           # Barrel exports
 │   │
+│   ├── config/                    # Configuration layer
+│   │   ├── evm.ts                 # EVM chain configuration
+│   │   ├── evm.test.ts            # Config tests
+│   │   └── index.ts               # Barrel exports
+│   │
 │   ├── services/                  # Business logic layer
 │   │   ├── token/                 # Token management
-│   │   │   ├── token-service.ts          # Base CRUD service
-│   │   │   ├── erc20-token-service.ts    # ERC-20 specialized service
-│   │   │   ├── test-fixtures.ts          # Test data
-│   │   │   ├── token-service.test.ts     # Unit tests
+│   │   │   ├── token-service.ts              # Base CRUD service
+│   │   │   ├── erc20-token-service.ts        # ERC-20 specialized service
+│   │   │   ├── erc20-token-service.test.ts   # ERC-20 service tests
+│   │   │   ├── test-fixtures.ts              # Test data
+│   │   │   ├── token-service.test.ts         # Unit tests
 │   │   │   └── index.ts
 │   │   │
 │   │   └── types/                 # Service-layer types (DB only)
@@ -361,6 +367,9 @@ midcurve-services/
 │   ├── utils/                     # Utility functions
 │   │   ├── evm.ts                 # Address validation/normalization
 │   │   ├── evm.test.ts            # Utils tests
+│   │   ├── erc20-abi.ts           # Minimal ERC-20 ABI
+│   │   ├── erc20-reader.ts        # Contract metadata reader
+│   │   ├── erc20-reader.test.ts   # Reader tests
 │   │   └── index.ts
 │   │
 │   └── index.ts                   # Main entry point
@@ -368,6 +377,7 @@ midcurve-services/
 ├── prisma/
 │   └── schema.prisma              # Database schema (PostgreSQL)
 │
+├── .env.example                   # Environment variables template
 ├── vitest.config.ts               # Test configuration
 ├── package.json                   # ESM, Next.js/Vercel compatible
 └── tsconfig.json                  # Strict TypeScript config
@@ -380,8 +390,13 @@ midcurve-services/
 - No database-specific types
 - Platform abstractions (Token, Pool)
 
+**`src/config/`** - Configuration layer
+- EVM chain configuration (RPC URLs, public clients)
+- Centralized config management
+- Environment-based setup
+
 **`src/services/`** - Business logic and CRUD operations
-- Token management (create, read, update, delete)
+- Token management (create, read, update, delete, discover)
 - Future: Pool management, position tracking, risk calculations
 
 **`src/services/types/`** - Service-layer specific types
@@ -391,6 +406,7 @@ midcurve-services/
 
 **`src/utils/`** - Utility functions
 - EVM address operations (validation, normalization, comparison)
+- ERC-20 token utilities (ABI, contract readers)
 - Future: Solana utilities, math helpers, formatters
 
 ## Technology Stack
@@ -647,16 +663,22 @@ We use `viem` for EIP-55 checksumming instead of web3.js or ethers.js because:
 ### Test Coverage
 
 **Current Status:**
-- ✅ **61 tests passing**
-- ✅ **Execution time**: ~550ms
+- ✅ **121 tests passing**
+- ✅ **Execution time**: ~350ms
 - ✅ **Coverage**:
   - EVM utilities: 25 tests (100% coverage)
+  - EVM configuration: 23 tests (100% coverage)
+  - ERC-20 reader: 22 tests (100% coverage)
   - TokenService: 36 tests (100% coverage of create method)
+  - Erc20TokenService: 15 tests (100% coverage of discoverToken method)
 
 **Test Distribution:**
 ```
-src/utils/evm.test.ts                    25 tests   6ms
-src/services/token/token-service.test.ts  36 tests  324ms
+src/utils/evm.test.ts                        25 tests    7ms
+src/utils/erc20-reader.test.ts               22 tests    6ms
+src/config/evm.test.ts                       23 tests    7ms
+src/services/token/token-service.test.ts     36 tests   13ms
+src/services/token/erc20-token-service.test.ts 15 tests   9ms
 ```
 
 ### Test Fixtures Pattern
@@ -881,6 +903,218 @@ Expand to additional platforms:
 - Gas optimization strategies
 - Cross-chain position management
 
+## EVM Configuration
+
+### Overview
+
+Midcurve Services includes a centralized EVM configuration system (`EvmConfig`) that manages RPC endpoints, public clients, and chain metadata for all supported EVM chains.
+
+This system enables:
+- **Token Discovery**: Automatically read token metadata from contracts
+- **On-Chain Queries**: Fetch pool state, position data, and more
+- **Multi-Chain Support**: Seamlessly work with Ethereum, Arbitrum, Base, BSC, Polygon, and Optimism
+- **Environment-Based Config**: Configure RPC endpoints via environment variables
+
+### Environment Configuration
+
+**IMPORTANT:** RPC URL environment variables are **REQUIRED**. The application will throw an error at runtime if you attempt to use a chain without its RPC URL configured.
+
+Create a `.env` file in your project root (use `.env.example` as a template):
+
+```bash
+# Ethereum Mainnet (Chain ID: 1) - REQUIRED
+RPC_URL_ETHEREUM=https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+
+# Arbitrum One (Chain ID: 42161) - REQUIRED
+RPC_URL_ARBITRUM=https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+
+# Base (Chain ID: 8453) - REQUIRED
+RPC_URL_BASE=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+
+# BNB Smart Chain (Chain ID: 56) - REQUIRED
+RPC_URL_BSC=https://bsc-dataseed1.binance.org
+
+# Polygon (Chain ID: 137) - REQUIRED
+RPC_URL_POLYGON=https://polygon-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+
+# Optimism (Chain ID: 10) - REQUIRED
+RPC_URL_OPTIMISM=https://opt-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+```
+
+**Note:** You only need to configure RPC URLs for chains you plan to use. If you attempt to access an unconfigured chain, you'll receive a comprehensive error message with setup instructions.
+
+### Supported Chains
+
+| Chain | Chain ID | Environment Variable |
+|-------|----------|---------------------|
+| Ethereum | 1 | `RPC_URL_ETHEREUM` |
+| Arbitrum One | 42161 | `RPC_URL_ARBITRUM` |
+| Base | 8453 | `RPC_URL_BASE` |
+| BNB Smart Chain | 56 | `RPC_URL_BSC` |
+| Polygon | 137 | `RPC_URL_POLYGON` |
+| Optimism | 10 | `RPC_URL_OPTIMISM` |
+
+### Usage
+
+#### Basic Configuration Access
+
+```typescript
+import { EvmConfig, SupportedChainId } from '@midcurve/services';
+
+// Get singleton instance
+const config = EvmConfig.getInstance();
+
+// Check if chain is supported
+if (config.isChainSupported(SupportedChainId.ETHEREUM)) {
+  console.log('Ethereum is supported!');
+}
+
+// Get chain configuration
+const ethConfig = config.getChainConfig(SupportedChainId.ETHEREUM);
+console.log(ethConfig);
+// {
+//   chainId: 1,
+//   name: 'Ethereum',
+//   rpcUrl: 'https://eth-mainnet.g.alchemy.com/v2/...',
+//   blockExplorer: 'https://etherscan.io',
+//   viemChain: {...}
+// }
+
+// Get all supported chain IDs
+const chains = config.getSupportedChainIds();
+// [1, 42161, 8453, 56, 137, 10]
+```
+
+#### Using Public Clients
+
+```typescript
+import { EvmConfig } from '@midcurve/services';
+
+const config = EvmConfig.getInstance();
+
+// Get viem PublicClient for Ethereum
+const client = config.getPublicClient(1);
+
+// Use client for on-chain queries
+const blockNumber = await client.getBlockNumber();
+console.log(`Latest block: ${blockNumber}`);
+
+// Read from a contract
+const balance = await client.readContract({
+  address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  abi: erc20Abi,
+  functionName: 'balanceOf',
+  args: ['0x...'],
+});
+```
+
+**Note:** Public clients are **cached per chain** for performance. Subsequent calls to `getPublicClient(chainId)` return the same instance.
+
+### Token Discovery
+
+The `Erc20TokenService.discoverToken()` method uses `EvmConfig` to automatically discover and save tokens from on-chain contract data.
+
+#### How It Works
+
+1. **Check Database**: First checks if token already exists (avoids RPC call)
+2. **Validate Chain**: Ensures the chain ID is supported
+3. **Read Contract**: Uses multicall to efficiently read `name()`, `symbol()`, `decimals()`
+4. **Save to Database**: Creates token entry with discovered metadata
+5. **Return Token**: Returns the fully populated `Erc20Token`
+
+#### Example Usage
+
+```typescript
+import { Erc20TokenService } from '@midcurve/services';
+
+const service = new Erc20TokenService();
+
+// Discover USDC on Ethereum
+const usdc = await service.discoverToken(
+  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  1
+);
+
+console.log(usdc);
+// {
+//   id: 'token_...',
+//   tokenType: 'evm-erc20',
+//   name: 'USD Coin',
+//   symbol: 'USDC',
+//   decimals: 6,
+//   config: {
+//     address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+//     chainId: 1
+//   },
+//   createdAt: Date,
+//   updatedAt: Date
+// }
+
+// Discover token on Arbitrum
+const arbUsdc = await service.discoverToken(
+  '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  42161
+);
+```
+
+#### Idempotent Discovery
+
+`discoverToken()` is **idempotent** - calling it multiple times with the same address/chain returns the existing token without making RPC calls:
+
+```typescript
+// First call: Reads from contract, saves to DB
+const token1 = await service.discoverToken('0xA0b8...', 1);
+
+// Second call: Returns existing token from DB (no RPC call)
+const token2 = await service.discoverToken('0xA0b8...', 1);
+
+// Same token
+assert(token1.id === token2.id);
+```
+
+#### Error Handling
+
+```typescript
+try {
+  await service.discoverToken('0x...', 1);
+} catch (error) {
+  if (error instanceof TokenMetadataError) {
+    // Contract doesn't implement ERC-20 metadata
+    console.error('Not a valid ERC-20 token');
+  } else if (error.message.includes('Chain')) {
+    // Unsupported chain
+    console.error('Chain not configured');
+  } else {
+    // Other errors (network, etc.)
+    console.error('Discovery failed:', error);
+  }
+}
+```
+
+### Dependency Injection
+
+For testing, you can inject a custom `EvmConfig` instance:
+
+```typescript
+import { Erc20TokenService, EvmConfig } from '@midcurve/services';
+
+// Custom config (e.g., for testing)
+const customConfig = new EvmConfig();
+
+const service = new Erc20TokenService({
+  evmConfig: customConfig,
+});
+```
+
+### Architecture Benefits
+
+1. **Single Source of Truth**: All RPC configuration in one place
+2. **Environment-Based**: Different RPC endpoints per environment (dev/staging/prod)
+3. **Efficient Caching**: Public clients reused across the application
+4. **Type-Safe**: Leverages viem's typed clients and ABIs
+5. **Testable**: Easy to mock in unit tests
+6. **Extensible**: Add new chains without breaking existing code
+
 ## Development Philosophy
 
 1. **Type Safety First**: Leverage TypeScript's type system for correctness
@@ -895,6 +1129,10 @@ Expand to additional platforms:
 ```bash
 # Install dependencies
 npm install
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env and add your RPC URLs
 
 # Generate Prisma client
 npm run prisma:generate

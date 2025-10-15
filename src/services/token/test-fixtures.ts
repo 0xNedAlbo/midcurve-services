@@ -400,6 +400,52 @@ export const ZERO_DECIMALS_TOKEN: TokenFixture = {
 };
 
 // ============================================================================
+// Token Discovery Fixtures
+// ============================================================================
+
+/**
+ * Token for testing discovery flow
+ * This token is "discovered" from on-chain data
+ */
+export const DISCOVERED_TOKEN: TokenFixture = {
+  input: {
+    tokenType: 'evm-erc20',
+    name: 'Discovered Token',
+    symbol: 'DISC',
+    decimals: 18,
+    config: {
+      address: '0x6666666666666666666666666666666666666666',
+      chainId: 1,
+    },
+  },
+  dbResult: {
+    id: 'token_discovered_001',
+    createdAt: new Date('2024-01-13T00:00:00Z'),
+    updatedAt: new Date('2024-01-13T00:00:00Z'),
+    tokenType: 'evm-erc20',
+    name: 'Discovered Token',
+    symbol: 'DISC',
+    decimals: 18,
+    logoUrl: null,
+    coingeckoId: null,
+    marketCap: null,
+    config: {
+      address: '0x6666666666666666666666666666666666666666',
+      chainId: 1,
+    },
+  },
+};
+
+/**
+ * Non-compliant token for testing error cases
+ * This contract doesn't implement ERC-20 metadata properly
+ */
+export const NON_COMPLIANT_TOKEN = {
+  address: '0x7777777777777777777777777777777777777777',
+  chainId: 1,
+};
+
+// ============================================================================
 // Fixture Collections
 // ============================================================================
 
@@ -424,10 +470,16 @@ export const EDGE_CASE_FIXTURES = {
   ZERO_DECIMALS_TOKEN,
 } as const;
 
+export const DISCOVERY_FIXTURES = {
+  DISCOVERED_TOKEN,
+  NON_COMPLIANT_TOKEN,
+} as const;
+
 export const ALL_FIXTURES = {
   ...ERC20_FIXTURES,
   ...SOLANA_FIXTURES,
   ...EDGE_CASE_FIXTURES,
+  ...DISCOVERY_FIXTURES,
 } as const;
 
 // ============================================================================

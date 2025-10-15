@@ -12,6 +12,8 @@ import type {
   UpdateErc20TokenInput,
 } from '../types/token/token-input.js';
 import { isValidAddress, normalizeAddress } from '../../utils/evm.js';
+import { readTokenMetadata, TokenMetadataError } from '../../utils/erc20-reader.js';
+import { EvmConfig } from '../../config/evm.js';
 import { TokenService } from './token-service.js';
 
 /**
@@ -24,6 +26,12 @@ export interface Erc20TokenServiceDependencies {
    * If not provided, a new PrismaClient instance will be created
    */
   prisma?: PrismaClient;
+
+  /**
+   * EVM configuration for chain RPC access
+   * If not provided, the singleton EvmConfig instance will be used
+   */
+  evmConfig?: EvmConfig;
 }
 
 /**
@@ -35,15 +43,18 @@ export interface Erc20TokenServiceDependencies {
 export class Erc20TokenService {
   private readonly tokenService: TokenService;
   private readonly _prisma: PrismaClient;
+  private readonly _evmConfig: EvmConfig;
 
   /**
    * Creates a new Erc20TokenService instance
    *
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
+   * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
    */
   constructor(dependencies: Erc20TokenServiceDependencies = {}) {
     this._prisma = dependencies.prisma ?? new PrismaClient();
+    this._evmConfig = dependencies.evmConfig ?? EvmConfig.getInstance();
     this.tokenService = new TokenService({ prisma: this._prisma });
   }
 
@@ -52,6 +63,13 @@ export class Erc20TokenService {
    */
   protected get prisma(): PrismaClient {
     return this._prisma;
+  }
+
+  /**
+   * Get the EVM configuration instance
+   */
+  protected get evmConfig(): EvmConfig {
+    return this._evmConfig;
   }
 
   /**
@@ -309,5 +327,100 @@ export class Erc20TokenService {
     await this.prisma.token.delete({
       where: { id },
     });
+  }
+
+  /**
+   * Discover and create an ERC-20 token from on-chain contract data
+   *
+   * Checks the database first for an existing token. If not found, reads
+   * token metadata (name, symbol, decimals) from the contract and creates
+   * a new token entry in the database.
+   *
+   * This is useful for auto-discovering tokens that users interact with
+   * without requiring manual entry of token details.
+   *
+   * @param address - Token contract address (any case, will be normalized)
+   * @param chainId - Chain ID where the token exists
+   * @returns The discovered or existing token with all fields populated
+   * @throws Error if address format is invalid
+   * @throws Error if chain ID is not supported
+   * @throws TokenMetadataError if contract doesn't implement ERC-20 metadata
+   *
+   * @example
+   * ```typescript
+   * const service = new Erc20TokenService();
+   *
+   * // Discover USDC on Ethereum
+   * const usdc = await service.discoverToken(
+   *   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+   *   1
+   * );
+   * // { name: 'USD Coin', symbol: 'USDC', decimals: 6, ... }
+   * ```
+   */
+  async discoverToken(
+    address: string,
+    chainId: number
+  ): Promise<Erc20Token> {
+    // Validate address format
+    if (!isValidAddress(address)) {
+      throw new Error(`Invalid Ethereum address format: ${address}`);
+    }
+
+    // Normalize address to EIP-55 checksum format
+    const normalizedAddress = normalizeAddress(address);
+
+    // Check if token already exists in database
+    const existing = await this.findByAddressAndChain(
+      normalizedAddress,
+      chainId
+    );
+
+    if (existing) {
+      // Token already exists, return it immediately (no RPC call needed)
+      return existing;
+    }
+
+    // Verify chain is supported before attempting RPC call
+    if (!this.evmConfig.isChainSupported(chainId)) {
+      throw new Error(
+        `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+          .getSupportedChainIds()
+          .join(', ')}`
+      );
+    }
+
+    // Get public client for the chain
+    const client = this.evmConfig.getPublicClient(chainId);
+
+    // Read token metadata from contract
+    let metadata;
+    try {
+      metadata = await readTokenMetadata(client, normalizedAddress);
+    } catch (error) {
+      // Re-throw TokenMetadataError with additional context
+      if (error instanceof TokenMetadataError) {
+        throw error;
+      }
+      throw new Error(
+        `Failed to read token metadata from contract at ${normalizedAddress} on chain ${chainId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    // Create token in database with discovered metadata
+    const token = await this.create({
+      tokenType: 'evm-erc20',
+      name: metadata.name,
+      symbol: metadata.symbol,
+      decimals: metadata.decimals,
+      config: {
+        address: normalizedAddress,
+        chainId,
+      },
+    });
+
+    return token;
   }
 }
