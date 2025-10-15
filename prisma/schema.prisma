@@ -1,0 +1,78 @@
+// Prisma schema file for Midcurve Finance
+// Documentation: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Models for concentrated liquidity positions
+// Supporting: Uniswap V3 (Ethereum), Orca (Solana), Raydium (Solana), PancakeSwap (BSC)
+
+model Token {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Common required fields
+  tokenType   String   // 'evm-erc20' or 'solana-spl'
+  name        String
+  symbol      String
+  decimals    Int
+
+  // Common optional fields
+  logoUrl     String?
+  coingeckoId String?
+  marketCap   Float?   // USD market cap from CoinGecko
+
+  // Platform-specific configuration (JSON)
+  // Contains address/mint, chainId/programId, platform identifier, etc.
+  config      Json
+
+  // Relations
+  poolsAsToken0 Pool[] @relation("PoolToken0")
+  poolsAsToken1 Pool[] @relation("PoolToken1")
+
+  // Indexes for efficient queries
+  @@index([tokenType])
+  @@index([symbol])
+  @@index([coingeckoId])
+}
+
+model Pool {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Common required fields
+  protocol  String   // 'uniswapv3', etc.
+  poolType  String   // 'CL_TICKS'
+  token0Id  String
+  token1Id  String
+  feeBps    Int      // Fee in basis points (3000 = 0.3%)
+
+  // Protocol-specific configuration (JSON) - Immutable
+  // Contains pool address, tick spacing, chainId, token addresses, etc.
+  config    Json
+
+  // Protocol-specific state (JSON) - Mutable
+  // Contains current price, liquidity, tick, fee growth, etc.
+  // For Uniswap V3: sqrtPriceX96, currentTick, liquidity, feeGrowthGlobal0/1
+  state     Json
+
+  // Relations to Token model
+  // Note: In TypeScript, Pool.token0 and Pool.token1 are full Token objects
+  // In database, we use foreign keys for efficient storage and queries
+  token0    Token    @relation("PoolToken0", fields: [token0Id], references: [id])
+  token1    Token    @relation("PoolToken1", fields: [token1Id], references: [id])
+
+  // Indexes for efficient queries
+  @@index([protocol])
+  @@index([poolType])
+  @@index([token0Id])
+  @@index([token1Id])
+}

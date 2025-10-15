@@ -1,0 +1,89 @@
+/**
+ * Pool - Abstract interface for liquidity pools across multiple DEX protocols
+ *
+ * This interface defines common fields shared by all pools regardless of protocol.
+ * Protocol-specific data is stored in the generic `config` field.
+ *
+ * Supported protocols:
+ * - Uniswap V3 (Ethereum)
+ * - PancakeSwap (BSC)
+ * - Orca (Solana)
+ * - Raydium (Solana)
+ */
+
+/**
+ * Protocol identifier
+ * Extensible to support additional protocols in the future
+ */
+export type Protocol = 'uniswapv3';
+
+/**
+ * Pool type identifier
+ * - 'CL_TICKS': Concentrated liquidity with tick-based pricing (Uniswap V3 style)
+ * Extensible for other pool types (constant product, stable pools, etc.)
+ */
+export type PoolType = 'CL_TICKS';
+
+import type { Token } from './token.js';
+import type { TokenConfig } from './token-config.js';
+
+/**
+ * Pool interface with generic config, state, and token types
+ *
+ * @template TConfig - Protocol-specific configuration type (immutable)
+ * @template TState - Protocol-specific state type (mutable)
+ * @template TToken - Token configuration type (extends TokenConfig)
+ */
+export interface Pool<
+  TConfig = Record<string, unknown>,
+  TState = Record<string, unknown>,
+  TToken extends TokenConfig = TokenConfig
+> {
+  /**
+   * Protocol identifier
+   * Identifies which DEX protocol this pool belongs to
+   */
+  protocol: Protocol;
+
+  /**
+   * Pool type identifier
+   * Identifies the pool mechanism (concentrated liquidity, constant product, etc.)
+   */
+  poolType: PoolType;
+
+  /**
+   * First token in the pair
+   * By convention, token0 < token1 (by address/mint comparison)
+   */
+  token0: Token<TToken>;
+
+  /**
+   * Second token in the pair
+   * By convention, token1 > token0 (by address/mint comparison)
+   */
+  token1: Token<TToken>;
+
+  /**
+   * Fee tier in basis points
+   * Examples:
+   * - 100 = 0.01% (1 bps)
+   * - 500 = 0.05% (5 bps)
+   * - 3000 = 0.3% (30 bps)
+   * - 10000 = 1% (100 bps)
+   */
+  feeBps: number;
+
+  /**
+   * Protocol-specific configuration (immutable)
+   * This field is persisted as JSON in PostgreSQL and contains
+   * protocol-specific immutable data like pool addresses, tick spacing, chain ID, etc.
+   */
+  config: TConfig;
+
+  /**
+   * Protocol-specific state (mutable)
+   * This field is persisted as JSON in PostgreSQL and contains
+   * protocol-specific mutable data like current price, liquidity, tick, etc.
+   */
+  state: TState;
+}

@@ -1,0 +1,65 @@
+/**
+ * Token - Abstract interface for tokens across multiple blockchain platforms
+ *
+ * This interface defines common fields shared by all tokens regardless of platform.
+ * Platform-specific data is stored in the generic `config` field.
+ *
+ * Supported platforms:
+ * - Uniswap V3 (Ethereum)
+ * - PancakeSwap (BSC)
+ * - Orca (Solana)
+ * - Raydium (Solana)
+ */
+
+/**
+ * Token type identifier
+ * Extensible to support additional token standards in the future
+ */
+export type TokenType = 'evm-erc20' | 'solana-spl';
+
+export interface Token<TConfig = Record<string, unknown>> {
+  /**
+   * Token type identifier
+   * - 'evm-erc20': ERC-20 tokens on EVM-compatible chains (Ethereum, BSC, etc.)
+   * - 'solana-spl': SPL tokens on Solana
+   */
+  tokenType: TokenType;
+  /**
+   * Token name (e.g., "Wrapped Ether", "USD Coin")
+   */
+  name: string;
+
+  /**
+   * Token symbol (e.g., "WETH", "USDC")
+   */
+  symbol: string;
+
+  /**
+   * Number of decimal places for the token
+   * E.g., 18 for most ERC20 tokens, 6 for USDC, 9 for many Solana tokens
+   */
+  decimals: number;
+
+  /**
+   * URL to the token's logo/icon (optional)
+   */
+  logoUrl?: string;
+
+  /**
+   * CoinGecko ID for price/market data lookup (optional)
+   * E.g., "ethereum", "usd-coin"
+   */
+  coingeckoId?: string;
+
+  /**
+   * Market capitalization in USD according to CoinGecko (optional)
+   */
+  marketCap?: number;
+
+  /**
+   * Platform-specific configuration
+   * This field is persisted as JSON in PostgreSQL and contains
+   * platform-specific data like addresses, chain IDs, etc.
+   */
+  config: TConfig;
+}
