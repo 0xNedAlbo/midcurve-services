@@ -19,10 +19,10 @@ export * from './utils/index.js';
 // Export configuration
 export * from './config/index.js';
 
-// Export services here as they are implemented
-// Example:
-// export * from './services/position-service.js';
-// export * from './services/risk-service.js';
-// export * from './services/rebalance-service.js';
+// Export clients
+export * from './clients/index.js';
+
+// Export services
+export * from './services/token/index.js';
 
 export const version = '0.1.0';

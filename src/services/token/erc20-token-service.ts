@@ -15,6 +15,7 @@ import { isValidAddress, normalizeAddress } from '../../utils/evm.js';
 import { readTokenMetadata, TokenMetadataError } from '../../utils/erc20-reader.js';
 import { EvmConfig } from '../../config/evm.js';
 import { TokenService } from './token-service.js';
+import { CoinGeckoClient } from '../../clients/coingecko/index.js';
 
 /**
  * Dependencies for Erc20TokenService
@@ -32,6 +33,12 @@ export interface Erc20TokenServiceDependencies {
    * If not provided, the singleton EvmConfig instance will be used
    */
   evmConfig?: EvmConfig;
+
+  /**
+   * CoinGecko API client for token enrichment
+   * If not provided, the singleton CoinGeckoClient instance will be used
+   */
+  coinGeckoClient?: CoinGeckoClient;
 }
 
 /**
@@ -44,6 +51,7 @@ export class Erc20TokenService {
   private readonly tokenService: TokenService;
   private readonly _prisma: PrismaClient;
   private readonly _evmConfig: EvmConfig;
+  private readonly _coinGeckoClient: CoinGeckoClient;
 
   /**
    * Creates a new Erc20TokenService instance
@@ -51,10 +59,13 @@ export class Erc20TokenService {
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
    * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
+   * @param dependencies.coinGeckoClient - CoinGecko client instance (uses singleton if not provided)
    */
   constructor(dependencies: Erc20TokenServiceDependencies = {}) {
     this._prisma = dependencies.prisma ?? new PrismaClient();
     this._evmConfig = dependencies.evmConfig ?? EvmConfig.getInstance();
+    this._coinGeckoClient =
+      dependencies.coinGeckoClient ?? CoinGeckoClient.getInstance();
     this.tokenService = new TokenService({ prisma: this._prisma });
   }
 
@@ -70,6 +81,13 @@ export class Erc20TokenService {
    */
   protected get evmConfig(): EvmConfig {
     return this._evmConfig;
+  }
+
+  /**
+   * Get the CoinGecko client instance
+   */
+  protected get coinGeckoClient(): CoinGeckoClient {
+    return this._coinGeckoClient;
   }
 
   /**
@@ -422,5 +440,84 @@ export class Erc20TokenService {
     });
 
     return token;
+  }
+
+  /**
+   * Enrich an ERC-20 token with metadata from CoinGecko
+   *
+   * Updates the token with logoUrl, coingeckoId, and marketCap from CoinGecko.
+   * The token must already exist in the database before enrichment.
+   *
+   * If the token already has a coingeckoId, it's assumed to be properly enriched
+   * and will be returned immediately without making any API calls.
+   *
+   * @param tokenId - Token database ID
+   * @returns The enriched token with updated fields
+   * @throws Error if token not found in database
+   * @throws Error if token is not ERC-20 type
+   * @throws TokenNotFoundInCoinGeckoError if token not found in CoinGecko
+   * @throws CoinGeckoApiError if CoinGecko API request fails
+   *
+   * @example
+   * ```typescript
+   * const service = new Erc20TokenService();
+   *
+   * // First, create or discover a token
+   * const usdc = await service.discoverToken(
+   *   '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+   *   1
+   * );
+   *
+   * // Then enrich it with CoinGecko data
+   * const enriched = await service.enrichToken(usdc.id);
+   * // { ..., logoUrl: '...', coingeckoId: 'usd-coin', marketCap: 28000000000 }
+   *
+   * // Calling again returns immediately (already enriched)
+   * const same = await service.enrichToken(usdc.id);
+   * ```
+   */
+  async enrichToken(tokenId: string): Promise<Erc20Token> {
+    // Load token from database
+    const existing = await this.prisma.token.findUnique({
+      where: { id: tokenId },
+    });
+
+    if (!existing) {
+      throw new Error(`Token with id ${tokenId} not found`);
+    }
+
+    // Verify token is ERC-20 type
+    if (existing.tokenType !== 'evm-erc20') {
+      throw new Error(
+        `Token ${tokenId} is not an ERC-20 token (type: ${existing.tokenType})`
+      );
+    }
+
+    // If token already has coingeckoId, assume it's properly enriched
+    if (existing.coingeckoId) {
+      return this.mapToErc20Token(existing);
+    }
+
+    // Extract address and chainId from token config
+    const config = existing.config as { address: string; chainId: number };
+    const { address, chainId } = config;
+
+    // Fetch enrichment data from CoinGecko
+    const enrichmentData = await this.coinGeckoClient.getErc20EnrichmentData(
+      chainId,
+      address
+    );
+
+    // Update token in database
+    const updated = await this.prisma.token.update({
+      where: { id: tokenId },
+      data: {
+        logoUrl: enrichmentData.logoUrl,
+        coingeckoId: enrichmentData.coingeckoId,
+        marketCap: enrichmentData.marketCap,
+      },
+    });
+
+    return this.mapToErc20Token(updated);
   }
 }

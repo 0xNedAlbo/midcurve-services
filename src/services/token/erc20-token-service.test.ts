@@ -1597,4 +1597,262 @@ describe('Erc20TokenService', () => {
       });
     });
   });
+
+  // ==========================================================================
+  // EnrichToken Tests
+  // ==========================================================================
+
+  describe('enrichToken', () => {
+    const mockEnrichmentData = {
+      coingeckoId: 'usd-coin',
+      logoUrl: 'https://example.com/usdc-logo.png',
+      marketCap: 28000000000,
+      symbol: 'USDC',
+      name: 'USD Coin',
+    };
+
+    let coinGeckoClientMock: any;
+
+    beforeEach(() => {
+      // Mock CoinGecko client
+      coinGeckoClientMock = {
+        getErc20EnrichmentData: vi.fn(),
+      };
+
+      // Recreate service with mocked CoinGecko client
+      service = new Erc20TokenService({
+        prisma: prismaMock as unknown as PrismaClient,
+        evmConfig: evmConfigMock as unknown as EvmConfig,
+        coinGeckoClient: coinGeckoClientMock,
+      });
+    });
+
+    describe('successful enrichment', () => {
+      it('should enrich token with CoinGecko data', async () => {
+        const tokenWithoutEnrichment = {
+          ...USDC_ETHEREUM.dbResult,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+        };
+
+        // Mock: Token exists in database
+        prismaMock.token.findUnique.mockResolvedValue(tokenWithoutEnrichment);
+
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue(
+          mockEnrichmentData
+        );
+
+        // Mock: Token update
+        const enrichedToken = {
+          ...tokenWithoutEnrichment,
+          logoUrl: mockEnrichmentData.logoUrl,
+          coingeckoId: mockEnrichmentData.coingeckoId,
+          marketCap: mockEnrichmentData.marketCap,
+        };
+        prismaMock.token.update.mockResolvedValue(enrichedToken);
+
+        const result = await service.enrichToken(tokenWithoutEnrichment.id);
+
+        // Should load token from database
+        expect(prismaMock.token.findUnique).toHaveBeenCalledWith({
+          where: { id: tokenWithoutEnrichment.id },
+        });
+
+        // Should fetch enrichment data from CoinGecko
+        expect(coinGeckoClientMock.getErc20EnrichmentData).toHaveBeenCalledWith(
+          tokenWithoutEnrichment.config.chainId,
+          tokenWithoutEnrichment.config.address
+        );
+
+        // Should update token with enrichment data
+        expect(prismaMock.token.update).toHaveBeenCalledWith({
+          where: { id: tokenWithoutEnrichment.id },
+          data: {
+            logoUrl: mockEnrichmentData.logoUrl,
+            coingeckoId: mockEnrichmentData.coingeckoId,
+            marketCap: mockEnrichmentData.marketCap,
+          },
+        });
+
+        // Should return enriched token
+        expect(result.logoUrl).toBe(mockEnrichmentData.logoUrl);
+        expect(result.coingeckoId).toBe(mockEnrichmentData.coingeckoId);
+        expect(result.marketCap).toBe(mockEnrichmentData.marketCap);
+      });
+
+      it('should handle tokens without existing enrichment data', async () => {
+        const tokenWithoutEnrichment = {
+          ...USDC_ETHEREUM.dbResult,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(
+          tokenWithoutEnrichment
+        );
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue(
+          mockEnrichmentData
+        );
+
+        const enrichedToken = {
+          ...tokenWithoutEnrichment,
+          logoUrl: mockEnrichmentData.logoUrl,
+          coingeckoId: mockEnrichmentData.coingeckoId,
+          marketCap: mockEnrichmentData.marketCap,
+        };
+        prismaMock.token.update.mockResolvedValue(enrichedToken);
+
+        const result = await service.enrichToken(tokenWithoutEnrichment.id);
+
+        expect(result.logoUrl).toBe(mockEnrichmentData.logoUrl);
+        expect(result.coingeckoId).toBe(mockEnrichmentData.coingeckoId);
+        expect(result.marketCap).toBe(mockEnrichmentData.marketCap);
+      });
+
+      it('should skip enrichment if token already has coingeckoId', async () => {
+        const alreadyEnrichedToken = {
+          ...USDC_ETHEREUM.dbResult,
+          logoUrl: 'https://existing-logo.com/usdc.png',
+          coingeckoId: 'usd-coin',
+          marketCap: 27000000000,
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(alreadyEnrichedToken);
+
+        const result = await service.enrichToken(alreadyEnrichedToken.id);
+
+        // Should return existing token without calling CoinGecko
+        expect(coinGeckoClientMock.getErc20EnrichmentData).not.toHaveBeenCalled();
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+
+        // Should return token with existing enrichment data
+        expect(result.coingeckoId).toBe('usd-coin');
+        expect(result.logoUrl).toBe('https://existing-logo.com/usdc.png');
+        expect(result.marketCap).toBe(27000000000);
+      });
+    });
+
+    describe('error handling', () => {
+      it('should throw error if token not found in database', async () => {
+        prismaMock.token.findUnique.mockResolvedValue(null);
+
+        await expect(
+          service.enrichToken('non-existent-token-id')
+        ).rejects.toThrow('Token with id non-existent-token-id not found');
+
+        // Should not call CoinGecko or update
+        expect(coinGeckoClientMock.getErc20EnrichmentData).not.toHaveBeenCalled();
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error if token is not ERC-20 type', async () => {
+        const solanaToken = {
+          id: 'token_solana_001',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tokenType: 'solana-spl',
+          name: 'Wrapped SOL',
+          symbol: 'SOL',
+          decimals: 9,
+          logoUrl: null,
+          coingeckoId: null,
+          marketCap: null,
+          config: {
+            mint: 'So11111111111111111111111111111111111111112',
+          },
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(solanaToken);
+
+        await expect(service.enrichToken(solanaToken.id)).rejects.toThrow(
+          `Token ${solanaToken.id} is not an ERC-20 token (type: solana-spl)`
+        );
+
+        // Should not call CoinGecko or update
+        expect(coinGeckoClientMock.getErc20EnrichmentData).not.toHaveBeenCalled();
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error if token not found in CoinGecko', async () => {
+        const tokenWithoutEnrichment = {
+          ...USDC_ETHEREUM.dbResult,
+          coingeckoId: null,
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(tokenWithoutEnrichment);
+
+        // Mock: Token not found in CoinGecko
+        const error = new Error('Token not found in CoinGecko');
+        error.name = 'TokenNotFoundInCoinGeckoError';
+        coinGeckoClientMock.getErc20EnrichmentData.mockRejectedValue(error);
+
+        await expect(service.enrichToken(tokenWithoutEnrichment.id)).rejects.toThrow(
+          'Token not found in CoinGecko'
+        );
+
+        // Should not update token
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+
+      it('should throw error if CoinGecko API fails', async () => {
+        const tokenWithoutEnrichment = {
+          ...USDC_ETHEREUM.dbResult,
+          coingeckoId: null,
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(tokenWithoutEnrichment);
+
+        // Mock: CoinGecko API error
+        const error = new Error('CoinGecko API error: 429 Too Many Requests');
+        error.name = 'CoinGeckoApiError';
+        coinGeckoClientMock.getErc20EnrichmentData.mockRejectedValue(error);
+
+        await expect(service.enrichToken(tokenWithoutEnrichment.id)).rejects.toThrow(
+          'CoinGecko API error: 429 Too Many Requests'
+        );
+
+        // Should not update token
+        expect(prismaMock.token.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('integration with address normalization', () => {
+      it('should work with any case address in token config', async () => {
+        const tokenWithLowercaseAddress = {
+          ...USDC_ETHEREUM.dbResult,
+          coingeckoId: null,
+          config: {
+            address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // lowercase
+            chainId: 1,
+          },
+        };
+
+        prismaMock.token.findUnique.mockResolvedValue(
+          tokenWithLowercaseAddress
+        );
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue(
+          mockEnrichmentData
+        );
+
+        const enrichedToken = {
+          ...tokenWithLowercaseAddress,
+          logoUrl: mockEnrichmentData.logoUrl,
+          coingeckoId: mockEnrichmentData.coingeckoId,
+          marketCap: mockEnrichmentData.marketCap,
+        };
+        prismaMock.token.update.mockResolvedValue(enrichedToken);
+
+        await service.enrichToken(tokenWithLowercaseAddress.id);
+
+        // Should pass lowercase address to CoinGecko (it handles normalization)
+        expect(coinGeckoClientMock.getErc20EnrichmentData).toHaveBeenCalledWith(
+          1,
+          '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
+        );
+      });
+    });
+  });
 });
