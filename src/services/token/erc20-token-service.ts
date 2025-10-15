@@ -11,8 +11,12 @@ import type {
   CreateErc20TokenInput,
   UpdateErc20TokenInput,
 } from '../types/token/token-input.js';
-import { isValidAddress, normalizeAddress } from '../../utils/evm.js';
-import { readTokenMetadata, TokenMetadataError } from '../../utils/erc20-reader.js';
+import {
+  isValidAddress,
+  normalizeAddress,
+  readTokenMetadata,
+  TokenMetadataError,
+} from '../../utils/evm/index.js';
 import { EvmConfig } from '../../config/evm.js';
 import { TokenService } from './token-service.js';
 import { CoinGeckoClient } from '../../clients/coingecko/index.js';

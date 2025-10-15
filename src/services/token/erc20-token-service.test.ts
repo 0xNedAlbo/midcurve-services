@@ -9,7 +9,7 @@ import { PrismaClient } from '@prisma/client';
 import type { PublicClient } from 'viem';
 import { Erc20TokenService } from './erc20-token-service.js';
 import { EvmConfig } from '../../config/evm.js';
-import { TokenMetadataError } from '../../utils/erc20-reader.js';
+import { TokenMetadataError } from '../../utils/evm/index.js';
 import {
   USDC_ETHEREUM,
   DISCOVERED_TOKEN,

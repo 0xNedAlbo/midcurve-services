@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidAddress, normalizeAddress, compareAddresses } from './evm.js';
+import { isValidAddress, normalizeAddress, compareAddresses } from './address.js';
 
 describe('EVM Address Utilities', () => {
   describe('isValidAddress', () => {
