@@ -105,6 +105,11 @@ export class CoinGeckoClient {
   private tokensCache: CoinGeckoToken[] | null = null;
   private cacheExpiry: number = 0;
   private readonly cacheTimeout = 60 * 60 * 1000; // 1 hour
+
+  // Cache for individual coin details (by coinId)
+  private coinDetailsCache: Map<string, { data: CoinGeckoDetailedCoin; expiry: number }> = new Map();
+  private readonly coinDetailsCacheTimeout = 60 * 60 * 1000; // 1 hour
+
   private readonly logger: ServiceLogger;
 
   /**
@@ -308,6 +313,21 @@ export class CoinGeckoClient {
   async getCoinDetails(coinId: string): Promise<CoinGeckoDetailedCoin> {
     log.methodEntry(this.logger, 'getCoinDetails', { coinId });
 
+    const now = Date.now();
+
+    // Check cache first
+    const cached = this.coinDetailsCache.get(coinId);
+    if (cached && now < cached.expiry) {
+      log.cacheHit(this.logger, 'getCoinDetails', `coinDetails:${coinId}`);
+      log.methodExit(this.logger, 'getCoinDetails', {
+        coinId: cached.data.id,
+        fromCache: true,
+      });
+      return cached.data;
+    }
+
+    log.cacheMiss(this.logger, 'getCoinDetails', `coinDetails:${coinId}`);
+
     try {
       log.externalApiCall(this.logger, 'CoinGecko', `/coins/${coinId}`, {
         market_data: true,
@@ -335,8 +355,15 @@ export class CoinGeckoClient {
         'Retrieved coin details'
       );
 
+      // Cache the result
+      this.coinDetailsCache.set(coinId, {
+        data: coin,
+        expiry: now + this.coinDetailsCacheTimeout,
+      });
+
       log.methodExit(this.logger, 'getCoinDetails', {
         coinId: coin.id,
+        fromCache: false,
       });
       return coin;
     } catch (error) {
@@ -460,11 +487,12 @@ export class CoinGeckoClient {
   }
 
   /**
-   * Clear the token cache (useful for testing or manual refresh)
+   * Clear all caches (useful for testing or manual refresh)
    */
   clearCache(): void {
     this.tokensCache = null;
     this.cacheExpiry = 0;
+    this.coinDetailsCache.clear();
   }
 
   /**
