@@ -2,32 +2,39 @@
  * UniswapV3PoolService
  *
  * Specialized service for Uniswap V3 pool management.
- * Handles address validation, normalization, bigint conversion, and duplicate prevention.
+ * Handles address validation, normalization, token discovery, and pool state serialization.
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { Pool } from '../../shared/types/pool.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
 import type {
   UniswapV3PoolConfig,
   UniswapV3PoolState,
+  UniswapV3Pool,
 } from '../../shared/types/uniswapv3/pool.js';
-import type { Erc20Token, Erc20TokenConfig, TokenConfig } from '../../shared/types/token-config.js';
-import type { CreatePoolInput, UpdatePoolStateInput } from '../types/pool/pool-input.js';
+import type {
+  UniswapV3PoolDiscoverInput,
+  CreatePoolInput,
+  UpdatePoolInput,
+} from '../types/pool/pool-input.js';
 import {
   toPoolState,
   toPoolStateDB,
   type UniswapV3PoolStateDB,
 } from '../types/uniswapv3/pool-db.js';
+import { PoolService } from './pool-service.js';
 import {
   isValidAddress,
   normalizeAddress,
 } from '../../utils/evm/index.js';
-import { readPoolState, PoolStateError } from '../../utils/uniswapv3/pool-reader.js';
-import { PoolService } from './pool-service.js';
+import {
+  readPoolConfig,
+  readPoolState,
+  PoolConfigError,
+} from '../../utils/uniswapv3/index.js';
 import { EvmConfig } from '../../config/evm.js';
-import { createServiceLogger, log } from '../../logging/index.js';
-import type { ServiceLogger } from '../../logging/index.js';
+import { Erc20TokenService } from '../token/erc20-token-service.js';
+import { log } from '../../logging/index.js';
+import type { Erc20Token } from '../../shared/types/token.js';
 
 /**
  * Dependencies for UniswapV3PoolService
@@ -45,19 +52,23 @@ export interface UniswapV3PoolServiceDependencies {
    * If not provided, the singleton EvmConfig instance will be used
    */
   evmConfig?: EvmConfig;
+
+  /**
+   * ERC-20 token service for token discovery
+   * If not provided, a new Erc20TokenService instance will be created
+   */
+  erc20TokenService?: Erc20TokenService;
 }
 
 /**
  * UniswapV3PoolService
  *
- * Provides CRUD operations for Uniswap V3 pool management.
- * Validates and normalizes addresses, handles bigint conversion, prevents duplicate pools.
+ * Provides pool management for Uniswap V3 concentrated liquidity pools.
+ * Implements serialization methods for Uniswap V3-specific config and state types.
  */
-export class UniswapV3PoolService {
-  private readonly poolService: PoolService;
-  private readonly _prisma: PrismaClient;
+export class UniswapV3PoolService extends PoolService<'uniswapv3'> {
   private readonly _evmConfig: EvmConfig;
-  private readonly logger: ServiceLogger;
+  private readonly _erc20TokenService: Erc20TokenService;
 
   /**
    * Creates a new UniswapV3PoolService instance
@@ -65,104 +76,367 @@ export class UniswapV3PoolService {
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
    * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
+   * @param dependencies.erc20TokenService - ERC-20 token service (creates default if not provided)
    */
   constructor(dependencies: UniswapV3PoolServiceDependencies = {}) {
-    this._prisma = dependencies.prisma ?? new PrismaClient();
+    super(dependencies);
     this._evmConfig = dependencies.evmConfig ?? EvmConfig.getInstance();
-    this.poolService = new PoolService({ prisma: this._prisma });
-    this.logger = createServiceLogger('UniswapV3PoolService');
+    this._erc20TokenService =
+      dependencies.erc20TokenService ??
+      new Erc20TokenService({ prisma: this.prisma });
   }
 
   /**
-   * Get the Prisma client instance
-   */
-  protected get prisma(): PrismaClient {
-    return this._prisma;
-  }
-
-  /**
-   * Get the EvmConfig instance
+   * Get the EVM configuration instance
    */
   protected get evmConfig(): EvmConfig {
     return this._evmConfig;
   }
 
   /**
-   * Map Pool to UniswapV3Pool with bigint conversion
-   *
-   * Accepts Pool type (from PoolService) and converts state from DB format to application format
+   * Get the ERC-20 token service instance
    */
-  private mapToUniswapV3Pool(pool: Pool<unknown, unknown, TokenConfig> & {
-    token0: Erc20Token;
-    token1: Erc20Token;
-  }): UniswapV3Pool {
-    // Safeguard: Verify pool protocol
-    if (pool.protocol !== 'uniswapv3') {
-      throw new Error(
-        `Pool ${pool.id} is not a Uniswap V3 pool (protocol: ${pool.protocol})`
-      );
-    }
+  protected get erc20TokenService(): Erc20TokenService {
+    return this._erc20TokenService;
+  }
 
-    // Convert state from DB format (string) to application format (bigint)
-    const stateDB = pool.state as UniswapV3PoolStateDB;
-    const state = toPoolState(stateDB);
+  // ============================================================================
+  // ABSTRACT METHOD IMPLEMENTATIONS
+  // ============================================================================
+
+  /**
+   * Parse config from database JSON to application type
+   *
+   * For Uniswap V3, config contains only primitive types (no bigint),
+   * so this is essentially a pass-through with type casting.
+   *
+   * @param configDB - Config object from database (JSON)
+   * @returns Parsed Uniswap V3 config
+   */
+  parseConfig(configDB: unknown): UniswapV3PoolConfig {
+    const db = configDB as {
+      chainId: number;
+      address: string;
+      token0: string;
+      token1: string;
+      feeBps: number;
+      tickSpacing: number;
+    };
 
     return {
-      id: pool.id,
-      createdAt: pool.createdAt,
-      updatedAt: pool.updatedAt,
-      protocol: pool.protocol as UniswapV3Pool['protocol'],
-      poolType: pool.poolType as UniswapV3Pool['poolType'],
-      token0: pool.token0,
-      token1: pool.token1,
-      feeBps: pool.feeBps,
-      config: pool.config as UniswapV3PoolConfig,
-      state,
+      chainId: db.chainId,
+      address: db.address,
+      token0: db.token0,
+      token1: db.token1,
+      feeBps: db.feeBps,
+      tickSpacing: db.tickSpacing,
     };
   }
 
   /**
-   * Create a new Uniswap V3 pool or return existing one
+   * Serialize config from application type to database JSON
    *
-   * Validates and normalizes pool and token addresses to EIP-55 checksum format.
-   * Checks if a pool with the same address and chainId already exists.
-   * If it exists, returns the existing pool. Otherwise, creates a new one.
+   * For Uniswap V3, config contains only primitive types (no bigint),
+   * so this is essentially a pass-through.
    *
-   * @param input - Uniswap V3 pool data to create (omits id, createdAt, updatedAt)
-   * @returns The created or existing pool with all fields populated
-   * @throws Error if any address format is invalid
-   * @throws Error if tokens are not ERC-20 type
-   * @throws Error if token0 >= token1 (violates Uniswap V3 convention)
+   * @param config - Application config
+   * @returns Serialized config for database storage (JSON-serializable)
    */
-  async create(
-    input: CreatePoolInput<UniswapV3PoolConfig, UniswapV3PoolState, Erc20TokenConfig>
+  serializeConfig(config: UniswapV3PoolConfig): unknown {
+    return {
+      chainId: config.chainId,
+      address: config.address,
+      token0: config.token0,
+      token1: config.token1,
+      feeBps: config.feeBps,
+      tickSpacing: config.tickSpacing,
+    };
+  }
+
+  /**
+   * Parse state from database JSON to application type
+   *
+   * Converts string values to bigint for Uniswap V3 state fields.
+   *
+   * @param stateDB - State object from database (JSON with string values)
+   * @returns Parsed state with native bigint values
+   */
+  parseState(stateDB: unknown): UniswapV3PoolState {
+    return toPoolState(stateDB as UniswapV3PoolStateDB);
+  }
+
+  /**
+   * Serialize state from application type to database JSON
+   *
+   * Converts bigint values to strings for database storage.
+   *
+   * @param state - Application state with native bigint values
+   * @returns Serialized state for database storage
+   */
+  serializeState(state: UniswapV3PoolState): unknown {
+    return toPoolStateDB(state);
+  }
+
+  // ============================================================================
+  // ABSTRACT METHOD IMPLEMENTATION - DISCOVERY
+  // ============================================================================
+
+  /**
+   * Discover and create a Uniswap V3 pool from on-chain contract data
+   *
+   * Checks the database first for an existing pool. If not found:
+   * 1. Validates and normalizes pool address
+   * 2. Reads immutable pool config from on-chain (token0, token1, fee, tickSpacing)
+   * 3. Discovers/fetches token0 and token1 via Erc20TokenService
+   * 4. Reads current pool state from on-chain (sqrtPriceX96, liquidity, etc.)
+   * 5. Saves pool to database with token ID references
+   * 6. Returns Pool with full Token objects
+   *
+   * Discovery is idempotent - calling multiple times with the same address/chain
+   * returns the existing pool.
+   *
+   * Note: Pool state can be refreshed later using the refresh() method to get
+   * the latest on-chain values.
+   *
+   * @param params - Discovery parameters { poolAddress, chainId }
+   * @returns The discovered or existing pool with full Token objects
+   * @throws Error if address format is invalid
+   * @throws Error if chain ID is not supported
+   * @throws PoolConfigError if contract doesn't implement Uniswap V3 pool interface
+   */
+  override async discover(
+    params: UniswapV3PoolDiscoverInput
   ): Promise<UniswapV3Pool> {
-    log.methodEntry(this.logger, 'create', {
-      address: input.config.address,
-      chainId: input.config.chainId,
-      feeBps: input.feeBps,
-    });
+    const { poolAddress, chainId } = params;
+    log.methodEntry(this.logger, 'discover', { poolAddress, chainId });
 
     try {
-      // Validate pool address format
-      if (!isValidAddress(input.config.address)) {
+      // 1. Validate pool address format
+      if (!isValidAddress(poolAddress)) {
         const error = new Error(
-          `Invalid pool address format: ${input.config.address}`
+          `Invalid pool address format: ${poolAddress}`
         );
-        log.methodError(this.logger, 'create', error, {
-          address: input.config.address,
+        log.methodError(this.logger, 'discover', error, {
+          poolAddress,
+          chainId,
         });
         throw error;
       }
 
-      // Validate token addresses
+      // 2. Normalize to EIP-55
+      const normalizedAddress = normalizeAddress(poolAddress);
+      this.logger.debug(
+        { original: poolAddress, normalized: normalizedAddress },
+        'Pool address normalized for discovery'
+      );
+
+      // 3. Check database first (optimization)
+      const existing = await this.findByAddressAndChain(
+        normalizedAddress,
+        chainId
+      );
+
+      if (existing) {
+        this.logger.info(
+          {
+            id: existing.id,
+            address: normalizedAddress,
+            chainId,
+            token0: existing.token0.symbol,
+            token1: existing.token1.symbol,
+          },
+          'Pool already exists, skipping on-chain discovery'
+        );
+        log.methodExit(this.logger, 'discover', {
+          id: existing.id,
+          fromDatabase: true,
+        });
+        return existing;
+      }
+
+      // 4. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(chainId)) {
+        const error = new Error(
+          `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+            .getSupportedChainIds()
+            .join(', ')}`
+        );
+        log.methodError(this.logger, 'discover', error, { chainId });
+        throw error;
+      }
+
+      this.logger.debug(
+        { chainId },
+        'Chain is supported, proceeding with on-chain discovery'
+      );
+
+      // 5. Read on-chain pool configuration
+      const client = this.evmConfig.getPublicClient(chainId);
+      this.logger.debug(
+        { address: normalizedAddress, chainId },
+        'Reading pool configuration from contract'
+      );
+
+      let config;
+      try {
+        config = await readPoolConfig(client, normalizedAddress, chainId);
+      } catch (error) {
+        if (error instanceof PoolConfigError) {
+          log.methodError(this.logger, 'discover', error, {
+            address: normalizedAddress,
+            chainId,
+          });
+          throw error;
+        }
+        const wrappedError = new Error(
+          `Failed to read pool configuration from contract at ${normalizedAddress} on chain ${chainId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        log.methodError(this.logger, 'discover', wrappedError, {
+          address: normalizedAddress,
+          chainId,
+        });
+        throw wrappedError;
+      }
+
+      this.logger.info(
+        {
+          address: normalizedAddress,
+          chainId,
+          token0: config.token0,
+          token1: config.token1,
+          feeBps: config.feeBps,
+          tickSpacing: config.tickSpacing,
+        },
+        'Pool configuration read successfully from contract'
+      );
+
+      // 6. Discover tokens (creates if not exist)
+      this.logger.debug(
+        { token0: config.token0, token1: config.token1, chainId },
+        'Discovering pool tokens'
+      );
+
+      const [token0, token1] = await Promise.all([
+        this.erc20TokenService.discover({
+          address: config.token0,
+          chainId,
+        }),
+        this.erc20TokenService.discover({
+          address: config.token1,
+          chainId,
+        }),
+      ]);
+
+      this.logger.info(
+        {
+          token0Id: token0.id,
+          token0Symbol: token0.symbol,
+          token1Id: token1.id,
+          token1Symbol: token1.symbol,
+        },
+        'Pool tokens discovered successfully'
+      );
+
+      // 7. Read current pool state from on-chain
+      const state = await readPoolState(client, normalizedAddress);
+
+      // 8. Create pool using create() method (handles validation, normalization, and Token population)
+      this.logger.debug(
+        {
+          address: normalizedAddress,
+          chainId,
+          token0Id: token0.id,
+          token1Id: token1.id,
+        },
+        'Creating pool with discovered tokens'
+      );
+
+      const pool = await this.create({
+        protocol: 'uniswapv3',
+        poolType: 'CL_TICKS',
+        token0Id: token0.id,
+        token1Id: token1.id,
+        feeBps: config.feeBps,
+        config,
+        state,
+      });
+
+      this.logger.info(
+        {
+          id: pool.id,
+          address: normalizedAddress,
+          chainId,
+          token0: token0.symbol,
+          token1: token1.symbol,
+          feeBps: config.feeBps,
+        },
+        'Pool discovered and created successfully'
+      );
+
+      log.methodExit(this.logger, 'discover', { id: pool.id });
+      return pool;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(error instanceof Error && error.message.includes('Invalid')) &&
+        !(error instanceof PoolConfigError)
+      ) {
+        log.methodError(this.logger, 'discover', error as Error, {
+          poolAddress,
+          chainId,
+        });
+      }
+      throw error;
+    }
+  }
+
+  // ============================================================================
+  // CRUD OPERATIONS OVERRIDES
+  // ============================================================================
+
+  /**
+   * Create a new Uniswap V3 pool
+   *
+   * Overrides base implementation to add:
+   * - Address validation and normalization (pool address in config)
+   * - Token address validation and normalization (token0, token1 in config)
+   * - Populate full Token<'erc20'> objects in the result
+   *
+   * Note: This is a manual creation helper. For creating pools from on-chain data,
+   * use discover() which handles token discovery and pool state fetching.
+   *
+   * @param input - Pool data to create (with token0Id, token1Id)
+   * @returns The created pool with full Token objects
+   * @throws Error if address format is invalid
+   */
+  override async create(
+    input: CreatePoolInput<'uniswapv3'>
+  ): Promise<UniswapV3Pool> {
+    log.methodEntry(this.logger, 'create', {
+      address: input.config.address,
+      chainId: input.config.chainId,
+      token0Id: input.token0Id,
+      token1Id: input.token1Id,
+    });
+
+    try {
+      // Validate and normalize pool address
+      if (!isValidAddress(input.config.address)) {
+        const error = new Error(
+          `Invalid pool address format: ${input.config.address}`
+        );
+        log.methodError(this.logger, 'create', error, { input });
+        throw error;
+      }
+
+      // Validate and normalize token addresses
       if (!isValidAddress(input.config.token0)) {
         const error = new Error(
           `Invalid token0 address format: ${input.config.token0}`
         );
-        log.methodError(this.logger, 'create', error, {
-          token0: input.config.token0,
-        });
+        log.methodError(this.logger, 'create', error, { input });
         throw error;
       }
 
@@ -170,231 +444,68 @@ export class UniswapV3PoolService {
         const error = new Error(
           `Invalid token1 address format: ${input.config.token1}`
         );
-        log.methodError(this.logger, 'create', error, {
-          token1: input.config.token1,
-        });
+        log.methodError(this.logger, 'create', error, { input });
         throw error;
       }
 
-      // Normalize addresses to EIP-55 checksum format
-      const normalizedPoolAddress = normalizeAddress(input.config.address);
-      const normalizedToken0Address = normalizeAddress(input.config.token0);
-      const normalizedToken1Address = normalizeAddress(input.config.token1);
-
-      this.logger.debug(
-        {
-          originalPool: input.config.address,
-          normalizedPool: normalizedPoolAddress,
-          originalToken0: input.config.token0,
-          normalizedToken0: normalizedToken0Address,
-          originalToken1: input.config.token1,
-          normalizedToken1: normalizedToken1Address,
-        },
-        'Addresses normalized'
-      );
-
-      // Verify token ordering (token0 < token1)
-      if (normalizedToken0Address >= normalizedToken1Address) {
-        const error = new Error(
-          `Invalid token ordering: token0 (${normalizedToken0Address}) must be < token1 (${normalizedToken1Address})`
-        );
-        log.methodError(this.logger, 'create', error, {
-          token0: normalizedToken0Address,
-          token1: normalizedToken1Address,
-        });
-        throw error;
-      }
-
-      // Check if pool already exists with same address and chainId
-      log.dbOperation(this.logger, 'findFirst', 'Pool', {
-        address: normalizedPoolAddress,
-        chainId: input.config.chainId,
-      });
-
-      const existing = await this.prisma.pool.findFirst({
-        where: {
-          protocol: 'uniswapv3',
-          config: {
-            path: ['address'],
-            equals: normalizedPoolAddress,
-          },
-          AND: {
-            config: {
-              path: ['chainId'],
-              equals: input.config.chainId,
-            },
-          },
-        },
-        include: {
-          token0: true,
-          token1: true,
-        },
-      });
-
-      // If pool exists, return it
-      if (existing) {
-        this.logger.warn(
-          {
-            id: existing.id,
-            address: normalizedPoolAddress,
-            chainId: input.config.chainId,
-            feeBps: existing.feeBps,
-          },
-          'Pool already exists, returning existing pool'
-        );
-        log.methodExit(this.logger, 'create', { id: existing.id, duplicate: true });
-        return this.mapToUniswapV3Pool(existing as unknown as Pool<unknown, unknown, TokenConfig> & {
-          token0: Erc20Token;
-          token1: Erc20Token;
-        });
-      }
-
-      // Verify tokens are ERC-20 type (PoolService only checks existence)
-      log.dbOperation(this.logger, 'findUnique', 'Token', {
-        id: input.token0.id,
-      });
-      const token0Exists = await this.prisma.token.findUnique({
-        where: { id: input.token0.id },
-      });
-
-      if (token0Exists && token0Exists.tokenType !== 'evm-erc20') {
-        const error = new Error(
-          `Token ${input.token0.id} is not an ERC-20 token (type: ${token0Exists.tokenType})`
-        );
-        log.methodError(this.logger, 'create', error, {
-          token0Id: input.token0.id,
-          tokenType: token0Exists.tokenType,
-        });
-        throw error;
-      }
-
-      log.dbOperation(this.logger, 'findUnique', 'Token', {
-        id: input.token1.id,
-      });
-      const token1Exists = await this.prisma.token.findUnique({
-        where: { id: input.token1.id },
-      });
-
-      if (token1Exists && token1Exists.tokenType !== 'evm-erc20') {
-        const error = new Error(
-          `Token ${input.token1.id} is not an ERC-20 token (type: ${token1Exists.tokenType})`
-        );
-        log.methodError(this.logger, 'create', error, {
-          token1Id: input.token1.id,
-          tokenType: token1Exists.tokenType,
-        });
-        throw error;
-      }
-
-      // Convert state from bigint to string for database storage
-      const stateDB = toPoolStateDB(input.state);
-
-      // Create new pool with normalized addresses and converted state
-      // Delegate to PoolService which handles token existence validation and pool creation
-      const normalizedInput: CreatePoolInput<
-        UniswapV3PoolConfig,
-        UniswapV3PoolStateDB,
-        Erc20TokenConfig
-      > = {
+      // Normalize addresses
+      const normalizedInput: CreatePoolInput<'uniswapv3'> = {
         ...input,
         config: {
           ...input.config,
-          address: normalizedPoolAddress,
-          token0: normalizedToken0Address,
-          token1: normalizedToken1Address,
+          address: normalizeAddress(input.config.address),
+          token0: normalizeAddress(input.config.token0),
+          token1: normalizeAddress(input.config.token1),
         },
-        state: stateDB,
       };
 
-      const result = await this.poolService.create(normalizedInput);
+      // Call base implementation
+      await super.create(normalizedInput);
 
-      // Convert state back from string to bigint
-      const pool = this.mapToUniswapV3Pool(result as typeof result & {
-        token0: Erc20Token;
-        token1: Erc20Token;
-      });
-
-      this.logger.info(
-        {
-          id: pool.id,
-          address: normalizedPoolAddress,
-          chainId: input.config.chainId,
-          token0Symbol: pool.token0.symbol,
-          token1Symbol: pool.token1.symbol,
-          feeBps: pool.feeBps,
-        },
-        'Uniswap V3 pool created successfully'
+      // Re-fetch with full Token objects
+      // We need to find by address+chain since we don't have the ID yet from base.create()
+      const created = await this.findByAddressAndChain(
+        normalizedInput.config.address,
+        normalizedInput.config.chainId
       );
 
-      log.methodExit(this.logger, 'create', { id: pool.id });
-      return pool;
+      if (!created) {
+        const error = new Error(
+          `Pool not found after creation: ${normalizedInput.config.address}`
+        );
+        log.methodError(this.logger, 'create', error, { input });
+        throw error;
+      }
+
+      log.methodExit(this.logger, 'create', { id: created.id });
+      return created;
     } catch (error) {
       // Only log if not already logged
-      if (
-        !(
-          error instanceof Error &&
-          (error.message.includes('Invalid') ||
-            error.message.includes('not found') ||
-            error.message.includes('not an ERC-20 token'))
-        )
-      ) {
-        log.methodError(this.logger, 'create', error as Error, {
-          address: input.config.address,
-          chainId: input.config.chainId,
-        });
+      if (!(error instanceof Error && error.message.includes('Invalid'))) {
+        log.methodError(this.logger, 'create', error as Error, { input });
       }
       throw error;
     }
   }
 
   /**
-   * Find a Uniswap V3 pool by address and chain ID
+   * Find pool by ID
    *
-   * @param address - Pool contract address (will be normalized)
-   * @param chainId - Chain ID
-   * @returns The pool if found, null otherwise
-   * @throws Error if the address format is invalid
+   * Overrides base implementation to:
+   * - Filter by protocol type (returns null if not uniswapv3)
+   * - Populate full Token<'erc20'> objects
+   *
+   * @param id - Pool ID
+   * @returns Pool if found and is uniswapv3 protocol, null otherwise
    */
-  async findByAddressAndChain(
-    address: string,
-    chainId: number
-  ): Promise<UniswapV3Pool | null> {
-    log.methodEntry(this.logger, 'findByAddressAndChain', {
-      address,
-      chainId,
-    });
+  override async findById(id: string): Promise<UniswapV3Pool | null> {
+    log.methodEntry(this.logger, 'findById', { id });
 
     try {
-      // Validate and normalize address
-      if (!isValidAddress(address)) {
-        const error = new Error(`Invalid pool address format: ${address}`);
-        log.methodError(this.logger, 'findByAddressAndChain', error, {
-          address,
-        });
-        throw error;
-      }
-      const normalizedAddress = normalizeAddress(address);
+      log.dbOperation(this.logger, 'findUnique', 'Pool', { id });
 
-      // Query database
-      log.dbOperation(this.logger, 'findFirst', 'Pool', {
-        address: normalizedAddress,
-        chainId,
-      });
-
-      const result = await this.prisma.pool.findFirst({
-        where: {
-          protocol: 'uniswapv3',
-          config: {
-            path: ['address'],
-            equals: normalizedAddress,
-          },
-          AND: {
-            config: {
-              path: ['chainId'],
-              equals: chainId,
-            },
-          },
-        },
+      const result = await this.prisma.pool.findUnique({
+        where: { id },
         include: {
           token0: true,
           token1: true,
@@ -402,86 +513,25 @@ export class UniswapV3PoolService {
       });
 
       if (!result) {
-        this.logger.debug(
-          { address: normalizedAddress, chainId },
-          'Pool not found'
-        );
-        log.methodExit(this.logger, 'findByAddressAndChain', { found: false });
+        log.methodExit(this.logger, 'findById', { id, found: false });
         return null;
       }
 
-      this.logger.debug(
-        {
-          id: result.id,
-          address: normalizedAddress,
-          chainId,
-          token0Symbol: result.token0.symbol,
-          token1Symbol: result.token1.symbol,
-        },
-        'Pool found'
-      );
-      log.methodExit(this.logger, 'findByAddressAndChain', { id: result.id });
-      return this.mapToUniswapV3Pool(result as unknown as Pool<unknown, unknown, TokenConfig> & {
-        token0: Erc20Token;
-        token1: Erc20Token;
-      });
-    } catch (error) {
-      if (
-        !(error instanceof Error && error.message.includes('Invalid pool address'))
-      ) {
-        log.methodError(this.logger, 'findByAddressAndChain', error as Error, {
-          address,
-          chainId,
-        });
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Find a Uniswap V3 pool by its database ID
-   *
-   * @param id - Pool database ID
-   * @returns The pool if found and is Uniswap V3 type, null otherwise
-   */
-  async findById(id: string): Promise<UniswapV3Pool | null> {
-    log.methodEntry(this.logger, 'findById', { id });
-
-    try {
-      // Delegate to PoolService for database lookup
-      const result = await this.poolService.findById(id);
-
-      if (!result) {
-        this.logger.debug({ id }, 'Pool not found');
-        log.methodExit(this.logger, 'findById', { found: false });
-        return null;
-      }
-
-      // Safeguard: Only return if it's a Uniswap V3 pool
+      // Filter by protocol type
       if (result.protocol !== 'uniswapv3') {
         this.logger.debug(
           { id, protocol: result.protocol },
-          'Pool is not Uniswap V3 type'
+          'Pool found but is not uniswapv3 protocol'
         );
-        log.methodExit(this.logger, 'findById', { found: false, wrongProtocol: true });
+        log.methodExit(this.logger, 'findById', { id, found: false, reason: 'wrong_protocol' });
         return null;
       }
 
-      this.logger.debug(
-        {
-          id,
-          token0Symbol: result.token0.symbol,
-          token1Symbol: result.token1.symbol,
-        },
-        'Uniswap V3 pool found'
-      );
-      log.methodExit(this.logger, 'findById', { id });
+      // Map to UniswapV3Pool with full Token objects
+      const pool = this.mapDbResultToPool(result);
 
-      // Convert state from string to bigint
-      return this.mapToUniswapV3Pool(result as typeof result & {
-        token0: Erc20Token;
-        token1: Erc20Token;
-      });
+      log.methodExit(this.logger, 'findById', { id, found: true });
+      return pool;
     } catch (error) {
       log.methodError(this.logger, 'findById', error as Error, { id });
       throw error;
@@ -489,138 +539,141 @@ export class UniswapV3PoolService {
   }
 
   /**
-   * Update a Uniswap V3 pool's state
+   * Update pool
    *
-   * Note: Pool config is immutable and cannot be updated.
-   * Only the state field (which contains mutable data like current price,
-   * liquidity, tick, fee growth) can be updated.
+   * Overrides base implementation to add address normalization and
+   * populate full Token objects in the result.
    *
-   * @param id - Pool database ID
-   * @param input - New state data (with bigint values)
-   * @returns The updated pool
-   * @throws Error if pool not found or not Uniswap V3 type
+   * @param id - Pool ID
+   * @param input - Update input with optional fields
+   * @returns Updated pool with full Token objects
+   * @throws Error if pool not found or not uniswapv3 protocol
    */
-  async updateState(
+  override async update(
     id: string,
-    input: UpdatePoolStateInput<UniswapV3PoolState>
+    input: UpdatePoolInput<'uniswapv3'>
   ): Promise<UniswapV3Pool> {
-    log.methodEntry(this.logger, 'updateState', { id });
+    log.methodEntry(this.logger, 'update', { id, input });
 
     try {
-      // Verify pool exists and is Uniswap V3 (need to check before delegating)
-      const existing = await this.poolService.findById(id);
+      // Normalize address in config if provided
+      if (input.config?.address) {
+        if (!isValidAddress(input.config.address)) {
+          const error = new Error(
+            `Invalid pool address format: ${input.config.address}`
+          );
+          log.methodError(this.logger, 'update', error, { id, input });
+          throw error;
+        }
+        input.config.address = normalizeAddress(input.config.address);
+      }
 
-      if (!existing) {
-        const error = new Error(`Pool with id ${id} not found`);
-        log.methodError(this.logger, 'updateState', error, { id });
+      // Normalize token addresses in config if provided
+      if (input.config?.token0) {
+        if (!isValidAddress(input.config.token0)) {
+          const error = new Error(
+            `Invalid token0 address format: ${input.config.token0}`
+          );
+          log.methodError(this.logger, 'update', error, { id, input });
+          throw error;
+        }
+        input.config.token0 = normalizeAddress(input.config.token0);
+      }
+
+      if (input.config?.token1) {
+        if (!isValidAddress(input.config.token1)) {
+          const error = new Error(
+            `Invalid token1 address format: ${input.config.token1}`
+          );
+          log.methodError(this.logger, 'update', error, { id, input });
+          throw error;
+        }
+        input.config.token1 = normalizeAddress(input.config.token1);
+      }
+
+      // Call base implementation
+      await super.update(id, input);
+
+      // Re-fetch with full Token objects
+      const updated = await this.findById(id);
+
+      if (!updated) {
+        const error = new Error(`Pool ${id} not found after update`);
+        log.methodError(this.logger, 'update', error, { id });
         throw error;
       }
 
-      if (existing.protocol !== 'uniswapv3') {
-        const error = new Error(
-          `Pool ${id} is not a Uniswap V3 pool (protocol: ${existing.protocol})`
-        );
-        log.methodError(this.logger, 'updateState', error, {
-          id,
-          protocol: existing.protocol,
-        });
-        throw error;
-      }
-
-      // Convert state from bigint to string for database storage
-      const stateDB = toPoolStateDB(input.state);
-
-      // Delegate to PoolService for database update
-      const result = await this.poolService.updateState(id, { state: stateDB });
-
-      this.logger.info(
-        {
-          id,
-          token0Symbol: result.token0.symbol,
-          token1Symbol: result.token1.symbol,
-        },
-        'Uniswap V3 pool state updated successfully'
-      );
-      log.methodExit(this.logger, 'updateState', { id });
-
-      // Convert state back from string to bigint
-      const state = toPoolState(result.state as UniswapV3PoolStateDB);
-
-      return {
-        ...result,
-        token0: result.token0 as Erc20Token,
-        token1: result.token1 as Erc20Token,
-        protocol: result.protocol as UniswapV3Pool['protocol'],
-        poolType: result.poolType as UniswapV3Pool['poolType'],
-        config: result.config as unknown as UniswapV3PoolConfig,
-        state,
-      };
+      log.methodExit(this.logger, 'update', { id });
+      return updated;
     } catch (error) {
       // Only log if not already logged
-      if (
-        !(
-          error instanceof Error &&
-          (error.message.includes('not found') ||
-            error.message.includes('not a Uniswap V3 pool'))
-        )
-      ) {
-        log.methodError(this.logger, 'updateState', error as Error, { id });
+      if (!(error instanceof Error && error.message.includes('Invalid'))) {
+        log.methodError(this.logger, 'update', error as Error, { id });
       }
       throw error;
     }
   }
 
   /**
-   * Delete a Uniswap V3 pool
+   * Delete pool
    *
-   * @param id - Pool database ID
-   * @throws Error if pool not found or not Uniswap V3 type
+   * Overrides base implementation to:
+   * - Verify protocol type (error if pool exists but is not uniswapv3)
+   * - Check for dependent positions (prevent deletion if positions exist)
+   * - Silently succeed if pool doesn't exist (idempotent)
+   *
+   * @param id - Pool ID
+   * @returns Promise that resolves when deletion is complete
+   * @throws Error if pool exists but is not uniswapv3 protocol
+   * @throws Error if pool has dependent positions
    */
-  async delete(id: string): Promise<void> {
+  override async delete(id: string): Promise<void> {
     log.methodEntry(this.logger, 'delete', { id });
 
     try {
-      // Verify pool exists and is Uniswap V3 (need to check before delegating)
-      const existing = await this.poolService.findById(id);
+      // Check if pool exists and verify protocol type
+      log.dbOperation(this.logger, 'findUnique', 'Pool', { id });
+
+      const existing = await this.prisma.pool.findUnique({
+        where: { id },
+        include: {
+          positions: {
+            take: 1, // Just check if any exist
+          },
+        },
+      });
 
       if (!existing) {
-        const error = new Error(`Pool with id ${id} not found`);
+        this.logger.debug({ id }, 'Pool not found, delete operation is no-op');
+        log.methodExit(this.logger, 'delete', { id, deleted: false });
+        return;
+      }
+
+      // Verify protocol type
+      if (existing.protocol !== 'uniswapv3') {
+        const error = new Error(
+          `Cannot delete pool ${id}: expected protocol 'uniswapv3', got '${existing.protocol}'`
+        );
+        log.methodError(this.logger, 'delete', error, { id, protocol: existing.protocol });
+        throw error;
+      }
+
+      // Check for dependent positions
+      if (existing.positions.length > 0) {
+        const error = new Error(
+          `Cannot delete pool ${id}: pool has dependent positions. Delete positions first.`
+        );
         log.methodError(this.logger, 'delete', error, { id });
         throw error;
       }
 
-      if (existing.protocol !== 'uniswapv3') {
-        const error = new Error(
-          `Pool ${id} is not a Uniswap V3 pool (protocol: ${existing.protocol})`
-        );
-        log.methodError(this.logger, 'delete', error, {
-          id,
-          protocol: existing.protocol,
-        });
-        throw error;
-      }
+      // Call base implementation
+      await super.delete(id);
 
-      // Delegate to PoolService for deletion
-      await this.poolService.delete(id);
-
-      this.logger.info(
-        {
-          id,
-          token0Symbol: existing.token0.symbol,
-          token1Symbol: existing.token1.symbol,
-        },
-        'Uniswap V3 pool deleted successfully'
-      );
-      log.methodExit(this.logger, 'delete', { id });
+      log.methodExit(this.logger, 'delete', { id, deleted: true });
     } catch (error) {
       // Only log if not already logged
-      if (
-        !(
-          error instanceof Error &&
-          (error.message.includes('not found') ||
-            error.message.includes('not a Uniswap V3 pool'))
-        )
-      ) {
+      if (!(error instanceof Error && error.message.includes('Cannot delete'))) {
         log.methodError(this.logger, 'delete', error as Error, { id });
       }
       throw error;
@@ -631,131 +684,210 @@ export class UniswapV3PoolService {
    * Refresh pool state from on-chain data
    *
    * Fetches the current pool state from the blockchain and updates the database.
-   * This includes current price (sqrtPriceX96), tick, liquidity, and fee growth values.
+   * This is the primary method for updating pool state (vs update() which is a generic helper).
    *
-   * @param id - Pool database ID
-   * @returns The updated pool state with native bigint values
-   * @throws Error if pool not found or not Uniswap V3 type
-   * @throws Error if chain ID is not supported or RPC URL not configured
-   * @throws PoolStateError if on-chain read fails or returns invalid data
+   * Note: Only updates mutable state fields (sqrtPriceX96, liquidity, currentTick, feeGrowth).
+   * Config fields (address, token addresses, fee, tickSpacing) are immutable and not updated.
    *
-   * @example
-   * ```typescript
-   * const service = new UniswapV3PoolService();
-   * const newState = await service.refreshState('pool_123');
-   * console.log(`New price: ${newState.sqrtPriceX96}`);
-   * console.log(`Current tick: ${newState.currentTick}`);
-   * ```
+   * @param id - Pool ID
+   * @returns Updated pool with fresh on-chain state and full Token objects
+   * @throws Error if pool not found
+   * @throws Error if pool is not uniswapv3 protocol
+   * @throws Error if chain is not supported
+   * @throws Error if on-chain read fails
    */
-  async refreshState(id: string): Promise<UniswapV3PoolState> {
-    log.methodEntry(this.logger, 'refreshState', { id });
+  async refresh(id: string): Promise<UniswapV3Pool> {
+    log.methodEntry(this.logger, 'refresh', { id });
 
     try {
-      // Fetch pool from database
-      const pool = await this.findById(id);
+      // 1. Get existing pool to verify it exists and get config
+      const existing = await this.findById(id);
 
-      if (!pool) {
-        const error = new Error(`Pool with id ${id} not found`);
-        log.methodError(this.logger, 'refreshState', error, { id });
+      if (!existing) {
+        const error = new Error(`Pool not found: ${id}`);
+        log.methodError(this.logger, 'refresh', error, { id });
         throw error;
       }
 
-      // Extract chain ID and pool address from config
-      const { chainId, address } = pool.config;
-
       this.logger.debug(
         {
           id,
-          chainId,
-          address,
-          token0Symbol: pool.token0.symbol,
-          token1Symbol: pool.token1.symbol,
+          address: existing.config.address,
+          chainId: existing.config.chainId,
         },
-        'Fetching on-chain pool state'
+        'Refreshing pool state from on-chain data'
       );
 
-      // Get public client for the chain
-      let publicClient;
-      try {
-        publicClient = this.evmConfig.getPublicClient(chainId);
-      } catch (error) {
-        const wrappedError = new Error(
-          `Failed to get RPC client for chain ${chainId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+      // 2. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(existing.config.chainId)) {
+        const error = new Error(
+          `Chain ${existing.config.chainId} is not supported or not configured. Please configure RPC_URL_* environment variable.`
         );
-        log.methodError(this.logger, 'refreshState', wrappedError, {
-          id,
-          chainId,
-        });
-        throw wrappedError;
+        log.methodError(this.logger, 'refresh', error, { id, chainId: existing.config.chainId });
+        throw error;
       }
 
-      // Fetch current state from blockchain
-      let onChainState: UniswapV3PoolState;
-      try {
-        onChainState = await readPoolState(publicClient, address);
-      } catch (error) {
-        if (error instanceof PoolStateError) {
-          log.methodError(this.logger, 'refreshState', error, {
-            id,
-            chainId,
-            address,
-          });
-          throw error;
-        }
-        const wrappedError = new Error(
-          `Failed to read pool state: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-        log.methodError(this.logger, 'refreshState', wrappedError, {
-          id,
-          chainId,
-          address,
-        });
-        throw wrappedError;
-      }
+      // 3. Read fresh state from on-chain
+      const client = this.evmConfig.getPublicClient(existing.config.chainId);
 
       this.logger.debug(
-        {
-          id,
-          sqrtPriceX96: onChainState.sqrtPriceX96.toString(),
-          currentTick: onChainState.currentTick,
-          liquidity: onChainState.liquidity.toString(),
-        },
-        'Successfully fetched on-chain pool state'
+        { id, address: existing.config.address, chainId: existing.config.chainId },
+        'Reading fresh pool state from contract'
       );
 
-      // Update pool state in database using existing updateState method
-      await this.updateState(id, { state: onChainState });
+      let freshState: UniswapV3PoolState;
+      try {
+        freshState = await readPoolState(client, existing.config.address);
+      } catch (error) {
+        const wrappedError = new Error(
+          `Failed to read pool state from contract at ${existing.config.address} on chain ${existing.config.chainId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        log.methodError(this.logger, 'refresh', wrappedError, {
+          id,
+          address: existing.config.address,
+          chainId: existing.config.chainId,
+        });
+        throw wrappedError;
+      }
 
       this.logger.info(
         {
           id,
-          chainId,
-          token0Symbol: pool.token0.symbol,
-          token1Symbol: pool.token1.symbol,
-          currentTick: onChainState.currentTick,
+          address: existing.config.address,
+          chainId: existing.config.chainId,
+          sqrtPriceX96: freshState.sqrtPriceX96.toString(),
+          liquidity: freshState.liquidity.toString(),
+          currentTick: freshState.currentTick,
         },
-        'Pool state refreshed successfully from blockchain'
+        'Fresh pool state read from contract'
       );
 
-      log.methodExit(this.logger, 'refreshState', { id });
-      return onChainState;
+      // 4. Update pool state using update() method
+      const updated = await this.update(id, {
+        state: freshState,
+      });
+
+      this.logger.info(
+        {
+          id,
+          address: existing.config.address,
+          chainId: existing.config.chainId,
+        },
+        'Pool state refreshed successfully'
+      );
+
+      log.methodExit(this.logger, 'refresh', { id });
+      return updated;
     } catch (error) {
       // Only log if not already logged
       if (
-        !(
-          error instanceof Error &&
+        !(error instanceof Error &&
           (error.message.includes('not found') ||
-            error.message.includes('Failed to get RPC client') ||
-            error instanceof PoolStateError)
-        )
+           error.message.includes('not supported') ||
+           error.message.includes('Failed to read')))
       ) {
-        log.methodError(this.logger, 'refreshState', error as Error, { id });
+        log.methodError(this.logger, 'refresh', error as Error, { id });
       }
       throw error;
     }
+  }
+
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
+
+  /**
+   * Map database result to UniswapV3Pool
+   *
+   * Converts database Pool record with included Token relations
+   * to a fully-typed UniswapV3Pool with Erc20Token objects.
+   *
+   * @param result - Database result with token0 and token1 included
+   * @returns Fully-typed UniswapV3Pool
+   */
+  private mapDbResultToPool(result: any): UniswapV3Pool {
+    const config = this.parseConfig(result.config);
+    const state = this.parseState(result.state);
+
+    return {
+      id: result.id,
+      createdAt: result.createdAt,
+      updatedAt: result.updatedAt,
+      protocol: 'uniswapv3',
+      poolType: 'CL_TICKS',
+      token0: this.mapDbTokenToErc20Token(result.token0),
+      token1: this.mapDbTokenToErc20Token(result.token1),
+      feeBps: config.feeBps,
+      config,
+      state,
+    };
+  }
+
+  /**
+   * Map database token to Erc20Token
+   *
+   * @param dbToken - Database Token record
+   * @returns Fully-typed Erc20Token
+   */
+  private mapDbTokenToErc20Token(dbToken: any): Erc20Token {
+    return {
+      ...dbToken,
+      tokenType: 'erc20',
+      logoUrl: dbToken.logoUrl ?? undefined,
+      coingeckoId: dbToken.coingeckoId ?? undefined,
+      marketCap: dbToken.marketCap ?? undefined,
+      config: {
+        address: (dbToken.config as { address: string }).address,
+        chainId: (dbToken.config as { chainId: number }).chainId,
+      },
+    };
+  }
+
+  /**
+   * Find pool by address and chain
+   *
+   * @param address - Pool address (normalized)
+   * @param chainId - Chain ID
+   * @returns Pool with full Token objects if found, null otherwise
+   */
+  private async findByAddressAndChain(
+    address: string,
+    chainId: number
+  ): Promise<UniswapV3Pool | null> {
+    log.dbOperation(this.logger, 'findFirst', 'Pool', {
+      address,
+      chainId,
+      protocol: 'uniswapv3',
+    });
+
+    const result = await this.prisma.pool.findFirst({
+      where: {
+        protocol: 'uniswapv3',
+        // Query config JSON field for address and chainId
+        config: {
+          path: ['address'],
+          equals: address,
+        },
+      },
+      include: {
+        token0: true,
+        token1: true,
+      },
+    });
+
+    if (!result) {
+      return null;
+    }
+
+    // Verify chainId matches (additional safeguard)
+    const config = this.parseConfig(result.config);
+    if (config.chainId !== chainId) {
+      return null;
+    }
+
+    // Map to UniswapV3Pool with full Token objects
+    return this.mapDbResultToPool(result);
   }
 }

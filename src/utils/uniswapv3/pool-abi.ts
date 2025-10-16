@@ -1,19 +1,46 @@
 /**
  * Uniswap V3 Pool ABI
  *
- * Minimal ABI definition for reading Uniswap V3 pool state.
- * Includes only the functions needed for state refresh:
- * - slot0() - Current price and tick information
- * - liquidity() - Current pool liquidity
- * - feeGrowthGlobal0X128() - Accumulated fees for token0
- * - feeGrowthGlobal1X128() - Accumulated fees for token1
+ * Minimal ABI definition for reading Uniswap V3 pool configuration and state.
+ * Includes functions needed for pool discovery and state refresh.
  */
 
 /**
- * Minimal Uniswap V3 Pool ABI for state functions
+ * Minimal Uniswap V3 Pool ABI for configuration and state functions
  * Type-safe with viem's ABI format
  */
 export const uniswapV3PoolAbi = [
+  // Configuration functions (immutable)
+  {
+    type: 'function',
+    name: 'token0',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'token1',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'fee',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint24' }],
+  },
+  {
+    type: 'function',
+    name: 'tickSpacing',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'int24' }],
+  },
+
+  // State functions (mutable)
   {
     type: 'function',
     name: 'slot0',
@@ -61,14 +88,14 @@ export interface Slot0 {
   sqrtPriceX96: bigint;
   /** Current tick of the pool */
   tick: number;
-  /** Index of the last written observation */
+  /** Index of the last oracle observation */
   observationIndex: number;
   /** Current maximum number of observations */
   observationCardinality: number;
-  /** Next maximum number of observations to be written */
+  /** Next maximum number of observations */
   observationCardinalityNext: number;
-  /** Protocol fee (if enabled) */
+  /** Protocol fee (as uint8) */
   feeProtocol: number;
-  /** Whether the pool is unlocked (not in a swap) */
+  /** Whether the pool is unlocked */
   unlocked: boolean;
 }

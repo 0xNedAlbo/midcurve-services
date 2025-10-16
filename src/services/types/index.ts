@@ -22,9 +22,21 @@ export type {
 
 // Pool input types
 export type {
+  UniswapV3PoolDiscoverInput,
+  PoolDiscoverInputMap,
+  PoolDiscoverInput,
+  AnyPoolDiscoverInput,
   CreatePoolInput,
-  UpdatePoolStateInput,
+  CreateUniswapV3PoolInput,
+  CreateAnyPoolInput,
+  UpdatePoolInput,
+  UpdateUniswapV3PoolInput,
+  UpdateAnyPoolInput,
 } from './pool/index.js';
+
+// Uniswap V3 service types
+export type { UniswapV3PoolStateDB } from './uniswapv3/index.js';
+export { toPoolState, toPoolStateDB } from './uniswapv3/index.js';
 
 // Position input types
 export type {
@@ -33,7 +45,3 @@ export type {
   UniswapV3PositionDiscoverInput,
   PositionDiscoverInput,
 } from './position/index.js';
-
-// Uniswap V3 service types
-export type { UniswapV3PoolStateDB } from './uniswapv3/index.js';
-export { toPoolState, toPoolStateDB } from './uniswapv3/index.js';

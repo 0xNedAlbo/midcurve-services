@@ -1,18 +1,17 @@
 /**
- * Uniswap V3 Pool Database Types and Conversion Logic
+ * Uniswap V3 Pool State Database Serialization
  *
- * These types and functions are used by the service layer for database operations.
- * Not shared with UI/frontend as they don't have direct database access.
+ * Handles conversion between TypeScript bigint values and database string representation.
+ * PostgreSQL JSON fields store bigint as strings to avoid precision loss.
  */
 
-import type { UniswapV3PoolState } from '../../../shared/types/uniswapv3/index.js';
+import type { UniswapV3PoolState } from '../../../shared/types/uniswapv3/pool.js';
 
 /**
- * Uniswap V3 Pool State - Database Representation
+ * Uniswap V3 Pool State (Database Format)
  *
- * Same structure as UniswapV3PoolState but with bigint values
- * serialized as strings for PostgreSQL JSON storage.
- * This is the interface used when reading from/writing to the database.
+ * Represents pool state as stored in PostgreSQL JSON.
+ * All bigint values are serialized as strings.
  */
 export interface UniswapV3PoolStateDB {
   /**
@@ -22,6 +21,7 @@ export interface UniswapV3PoolStateDB {
 
   /**
    * Current tick of the pool
+   * Stored as number (no conversion needed)
    */
   currentTick: number;
 
@@ -42,28 +42,70 @@ export interface UniswapV3PoolStateDB {
 }
 
 /**
- * Convert database representation to TypeScript application type
- * Parses string values to native bigint
+ * Convert database state to application state
  *
- * @param db - Database state with string values
- * @returns Application state with bigint values
+ * Deserializes string values to native bigint for use in application code.
+ *
+ * @param stateDB - Pool state from database (with string values)
+ * @returns Pool state with native bigint values
+ *
+ * @example
+ * ```typescript
+ * const dbState = {
+ *   sqrtPriceX96: "1461446703485210103287273052203988822378723970341",
+ *   currentTick: -197312,
+ *   liquidity: "27831485581196817042",
+ *   feeGrowthGlobal0: "123456789",
+ *   feeGrowthGlobal1: "987654321"
+ * };
+ *
+ * const state = toPoolState(dbState);
+ * // {
+ * //   sqrtPriceX96: 1461446703485210103287273052203988822378723970341n,
+ * //   currentTick: -197312,
+ * //   liquidity: 27831485581196817042n,
+ * //   feeGrowthGlobal0: 123456789n,
+ * //   feeGrowthGlobal1: 987654321n
+ * // }
+ * ```
  */
-export function toPoolState(db: UniswapV3PoolStateDB): UniswapV3PoolState {
+export function toPoolState(stateDB: UniswapV3PoolStateDB): UniswapV3PoolState {
   return {
-    sqrtPriceX96: BigInt(db.sqrtPriceX96),
-    currentTick: db.currentTick,
-    liquidity: BigInt(db.liquidity),
-    feeGrowthGlobal0: BigInt(db.feeGrowthGlobal0),
-    feeGrowthGlobal1: BigInt(db.feeGrowthGlobal1),
+    sqrtPriceX96: BigInt(stateDB.sqrtPriceX96),
+    currentTick: stateDB.currentTick,
+    liquidity: BigInt(stateDB.liquidity),
+    feeGrowthGlobal0: BigInt(stateDB.feeGrowthGlobal0),
+    feeGrowthGlobal1: BigInt(stateDB.feeGrowthGlobal1),
   };
 }
 
 /**
- * Convert TypeScript application type to database representation
- * Serializes bigint values to strings
+ * Convert application state to database state
  *
- * @param state - Application state with bigint values
- * @returns Database state with string values
+ * Serializes native bigint values to strings for PostgreSQL JSON storage.
+ *
+ * @param state - Pool state with native bigint values
+ * @returns Pool state for database storage (with string values)
+ *
+ * @example
+ * ```typescript
+ * const state: UniswapV3PoolState = {
+ *   sqrtPriceX96: 1461446703485210103287273052203988822378723970341n,
+ *   currentTick: -197312,
+ *   liquidity: 27831485581196817042n,
+ *   feeGrowthGlobal0: 123456789n,
+ *   feeGrowthGlobal1: 987654321n
+ * };
+ *
+ * const dbState = toPoolStateDB(state);
+ * // {
+ * //   sqrtPriceX96: "1461446703485210103287273052203988822378723970341",
+ * //   currentTick: -197312,
+ * //   liquidity: "27831485581196817042",
+ * //   feeGrowthGlobal0: "123456789",
+ * //   feeGrowthGlobal1: "987654321"
+ * // }
+ * ```
  */
 export function toPoolStateDB(state: UniswapV3PoolState): UniswapV3PoolStateDB {
   return {
