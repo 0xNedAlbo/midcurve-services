@@ -23,7 +23,9 @@ import {
   isValidAddress,
   normalizeAddress,
 } from '../../utils/evm/index.js';
+import { readPoolState, PoolStateError } from '../../utils/uniswapv3/pool-reader.js';
 import { PoolService } from './pool-service.js';
+import { EvmConfig } from '../../config/evm.js';
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
 
@@ -37,6 +39,12 @@ export interface UniswapV3PoolServiceDependencies {
    * If not provided, a new PrismaClient instance will be created
    */
   prisma?: PrismaClient;
+
+  /**
+   * EVM configuration for chain RPC access
+   * If not provided, the singleton EvmConfig instance will be used
+   */
+  evmConfig?: EvmConfig;
 }
 
 /**
@@ -48,6 +56,7 @@ export interface UniswapV3PoolServiceDependencies {
 export class UniswapV3PoolService {
   private readonly poolService: PoolService;
   private readonly _prisma: PrismaClient;
+  private readonly _evmConfig: EvmConfig;
   private readonly logger: ServiceLogger;
 
   /**
@@ -55,9 +64,11 @@ export class UniswapV3PoolService {
    *
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
+   * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
    */
   constructor(dependencies: UniswapV3PoolServiceDependencies = {}) {
     this._prisma = dependencies.prisma ?? new PrismaClient();
+    this._evmConfig = dependencies.evmConfig ?? EvmConfig.getInstance();
     this.poolService = new PoolService({ prisma: this._prisma });
     this.logger = createServiceLogger('UniswapV3PoolService');
   }
@@ -67,6 +78,13 @@ export class UniswapV3PoolService {
    */
   protected get prisma(): PrismaClient {
     return this._prisma;
+  }
+
+  /**
+   * Get the EvmConfig instance
+   */
+  protected get evmConfig(): EvmConfig {
+    return this._evmConfig;
   }
 
   /**
@@ -604,6 +622,138 @@ export class UniswapV3PoolService {
         )
       ) {
         log.methodError(this.logger, 'delete', error as Error, { id });
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Refresh pool state from on-chain data
+   *
+   * Fetches the current pool state from the blockchain and updates the database.
+   * This includes current price (sqrtPriceX96), tick, liquidity, and fee growth values.
+   *
+   * @param id - Pool database ID
+   * @returns The updated pool state with native bigint values
+   * @throws Error if pool not found or not Uniswap V3 type
+   * @throws Error if chain ID is not supported or RPC URL not configured
+   * @throws PoolStateError if on-chain read fails or returns invalid data
+   *
+   * @example
+   * ```typescript
+   * const service = new UniswapV3PoolService();
+   * const newState = await service.refreshState('pool_123');
+   * console.log(`New price: ${newState.sqrtPriceX96}`);
+   * console.log(`Current tick: ${newState.currentTick}`);
+   * ```
+   */
+  async refreshState(id: string): Promise<UniswapV3PoolState> {
+    log.methodEntry(this.logger, 'refreshState', { id });
+
+    try {
+      // Fetch pool from database
+      const pool = await this.findById(id);
+
+      if (!pool) {
+        const error = new Error(`Pool with id ${id} not found`);
+        log.methodError(this.logger, 'refreshState', error, { id });
+        throw error;
+      }
+
+      // Extract chain ID and pool address from config
+      const { chainId, address } = pool.config;
+
+      this.logger.debug(
+        {
+          id,
+          chainId,
+          address,
+          token0Symbol: pool.token0.symbol,
+          token1Symbol: pool.token1.symbol,
+        },
+        'Fetching on-chain pool state'
+      );
+
+      // Get public client for the chain
+      let publicClient;
+      try {
+        publicClient = this.evmConfig.getPublicClient(chainId);
+      } catch (error) {
+        const wrappedError = new Error(
+          `Failed to get RPC client for chain ${chainId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        log.methodError(this.logger, 'refreshState', wrappedError, {
+          id,
+          chainId,
+        });
+        throw wrappedError;
+      }
+
+      // Fetch current state from blockchain
+      let onChainState: UniswapV3PoolState;
+      try {
+        onChainState = await readPoolState(publicClient, address);
+      } catch (error) {
+        if (error instanceof PoolStateError) {
+          log.methodError(this.logger, 'refreshState', error, {
+            id,
+            chainId,
+            address,
+          });
+          throw error;
+        }
+        const wrappedError = new Error(
+          `Failed to read pool state: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        log.methodError(this.logger, 'refreshState', wrappedError, {
+          id,
+          chainId,
+          address,
+        });
+        throw wrappedError;
+      }
+
+      this.logger.debug(
+        {
+          id,
+          sqrtPriceX96: onChainState.sqrtPriceX96.toString(),
+          currentTick: onChainState.currentTick,
+          liquidity: onChainState.liquidity.toString(),
+        },
+        'Successfully fetched on-chain pool state'
+      );
+
+      // Update pool state in database using existing updateState method
+      await this.updateState(id, { state: onChainState });
+
+      this.logger.info(
+        {
+          id,
+          chainId,
+          token0Symbol: pool.token0.symbol,
+          token1Symbol: pool.token1.symbol,
+          currentTick: onChainState.currentTick,
+        },
+        'Pool state refreshed successfully from blockchain'
+      );
+
+      log.methodExit(this.logger, 'refreshState', { id });
+      return onChainState;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          (error.message.includes('not found') ||
+            error.message.includes('Failed to get RPC client') ||
+            error instanceof PoolStateError)
+        )
+      ) {
+        log.methodError(this.logger, 'refreshState', error as Error, { id });
       }
       throw error;
     }
