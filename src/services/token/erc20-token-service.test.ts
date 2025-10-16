@@ -20,16 +20,21 @@ describe('Erc20TokenService', () => {
   let prismaMock: DeepMockProxy<PrismaClient>;
   let evmConfigMock: DeepMockProxy<EvmConfig>;
   let publicClientMock: DeepMockProxy<PublicClient>;
+  let coinGeckoClientMock: any;
   let service: Erc20TokenService;
 
   beforeEach(() => {
     prismaMock = mockDeep<PrismaClient>();
     evmConfigMock = mockDeep<EvmConfig>();
     publicClientMock = mockDeep<PublicClient>();
+    coinGeckoClientMock = {
+      getErc20EnrichmentData: vi.fn(),
+    };
 
     service = new Erc20TokenService({
       prisma: prismaMock as unknown as PrismaClient,
       evmConfig: evmConfigMock as unknown as EvmConfig,
+      coinGeckoClient: coinGeckoClientMock,
     });
   });
 
@@ -1140,8 +1145,8 @@ describe('Erc20TokenService', () => {
       // Execute
       await service.delete('token_usdc_eth_001');
 
-      // Verify both checks were performed
-      expect(prismaMock.token.findUnique).toHaveBeenCalledTimes(1);
+      // Verify both checks were performed (findUnique called twice: once in findById, once in delete)
+      expect(prismaMock.token.findUnique).toHaveBeenCalledTimes(2);
       expect(prismaMock.token.delete).toHaveBeenCalledTimes(1);
     });
   });
@@ -1174,6 +1179,15 @@ describe('Erc20TokenService', () => {
           input.decimals,
         ]);
 
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue({
+          coingeckoId: 'discovered-token',
+          logoUrl: 'https://example.com/discovered.png',
+          marketCap: 1000000,
+          symbol: input.symbol,
+          name: input.name,
+        });
+
         // Mock: Token creation
         prismaMock.token.create.mockResolvedValue(dbResult);
 
@@ -1199,6 +1213,9 @@ describe('Erc20TokenService', () => {
 
         // Verify multicall was made
         expect(publicClientMock.multicall).toHaveBeenCalledTimes(1);
+
+        // Verify CoinGecko enrichment was fetched
+        expect(coinGeckoClientMock.getErc20EnrichmentData).toHaveBeenCalledWith(1, input.config.address);
 
         // Verify token was created
         expect(prismaMock.token.create).toHaveBeenCalledTimes(1);
@@ -1282,6 +1299,15 @@ describe('Erc20TokenService', () => {
           tokenWithSpecialChars.decimals,
         ]);
 
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue({
+          coingeckoId: 'special-token',
+          logoUrl: 'https://example.com/special.png',
+          marketCap: 500000,
+          symbol: tokenWithSpecialChars.symbol,
+          name: tokenWithSpecialChars.name,
+        });
+
         // Mock: Create token
         prismaMock.token.create.mockResolvedValue({
           id: 'token_special',
@@ -1289,9 +1315,9 @@ describe('Erc20TokenService', () => {
           updatedAt: new Date(),
           tokenType: 'erc20',
           ...tokenWithSpecialChars,
-          logoUrl: null,
-          coingeckoId: null,
-          marketCap: null,
+          logoUrl: 'https://example.com/special.png',
+          coingeckoId: 'special-token',
+          marketCap: 500000,
           config: {
             address: tokenWithSpecialChars.address,
             chainId: tokenWithSpecialChars.chainId,
@@ -1370,17 +1396,17 @@ describe('Erc20TokenService', () => {
         publicClientMock.multicall.mockResolvedValue(['', 'TOKEN', 18]);
 
         await expect(
-          service.discover(
-            NON_COMPLIANT_TOKEN.address,
-            NON_COMPLIANT_TOKEN.chainId
-          )
+          service.discover({
+            address: NON_COMPLIANT_TOKEN.address,
+            chainId: NON_COMPLIANT_TOKEN.chainId,
+          })
         ).rejects.toThrow(TokenMetadataError);
 
         await expect(
-          service.discover(
-            NON_COMPLIANT_TOKEN.address,
-            NON_COMPLIANT_TOKEN.chainId
-          )
+          service.discover({
+            address: NON_COMPLIANT_TOKEN.address,
+            chainId: NON_COMPLIANT_TOKEN.chainId,
+          })
         ).rejects.toThrow('does not implement name()');
       });
 
@@ -1476,6 +1502,15 @@ describe('Erc20TokenService', () => {
           0,
         ]);
 
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue({
+          coingeckoId: 'zero-token',
+          logoUrl: 'https://example.com/zero.png',
+          marketCap: 100000,
+          symbol: 'ZERO',
+          name: 'Zero Decimals',
+        });
+
         // Mock: Create token
         prismaMock.token.create.mockResolvedValue({
           id: 'token_zero',
@@ -1485,11 +1520,11 @@ describe('Erc20TokenService', () => {
           name: 'Zero Decimals',
           symbol: 'ZERO',
           decimals: 0,
-          logoUrl: null,
-          coingeckoId: null,
-          marketCap: null,
+          logoUrl: 'https://example.com/zero.png',
+          coingeckoId: 'zero-token',
+          marketCap: 100000,
           config: {
-            address: '0xcccccccccccccccccccccccccccccccccccccccc',
+            address: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC',
             chainId: 1,
           },
         });
@@ -1514,6 +1549,15 @@ describe('Erc20TokenService', () => {
         // Mock: Contract read
         publicClientMock.multicall.mockResolvedValue(['USDC', 'USDC', 6]);
 
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue({
+          coingeckoId: 'usd-coin',
+          logoUrl: 'https://example.com/usdc.png',
+          marketCap: 28000000000,
+          symbol: 'USDC',
+          name: 'USD Coin',
+        });
+
         // Mock: Create token
         prismaMock.token.create.mockResolvedValue({
           id: 'token_usdc_arb',
@@ -1523,9 +1567,9 @@ describe('Erc20TokenService', () => {
           name: 'USDC',
           symbol: 'USDC',
           decimals: 6,
-          logoUrl: null,
-          coingeckoId: null,
-          marketCap: null,
+          logoUrl: 'https://example.com/usdc.png',
+          coingeckoId: 'usd-coin',
+          marketCap: 28000000000,
           config: {
             address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
             chainId: 42161,
@@ -1559,6 +1603,15 @@ describe('Erc20TokenService', () => {
           input.symbol,
           input.decimals,
         ]);
+
+        // Mock: CoinGecko enrichment data
+        coinGeckoClientMock.getErc20EnrichmentData.mockResolvedValue({
+          coingeckoId: 'discovered-token',
+          logoUrl: 'https://example.com/discovered.png',
+          marketCap: 1000000,
+          symbol: input.symbol,
+          name: input.name,
+        });
 
         // Mock: Create
         prismaMock.token.create.mockResolvedValue(dbResult);
