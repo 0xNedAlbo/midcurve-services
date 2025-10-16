@@ -13,6 +13,21 @@ datasource db {
 // Models for concentrated liquidity positions
 // Supporting: Uniswap V3 (Ethereum), Orca (Solana), Raydium (Solana), PancakeSwap (BSC)
 
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // User identification
+  name      String
+
+  // Relations
+  positions Position[]
+
+  // Indexes for efficient queries
+  @@index([name])
+}
+
 model Token {
   id          String   @id @default(cuid())
   createdAt   DateTime @default(now())
@@ -34,8 +49,10 @@ model Token {
   config      Json
 
   // Relations
-  poolsAsToken0 Pool[] @relation("PoolToken0")
-  poolsAsToken1 Pool[] @relation("PoolToken1")
+  poolsAsToken0         Pool[]     @relation("PoolToken0")
+  poolsAsToken1         Pool[]     @relation("PoolToken1")
+  positionsAsBaseToken  Position[] @relation("PositionBaseToken")
+  positionsAsQuoteToken Position[] @relation("PositionQuoteToken")
 
   // Indexes for efficient queries
   @@index([tokenType])
@@ -67,12 +84,68 @@ model Pool {
   // Relations to Token model
   // Note: In TypeScript, Pool.token0 and Pool.token1 are full Token objects
   // In database, we use foreign keys for efficient storage and queries
-  token0    Token    @relation("PoolToken0", fields: [token0Id], references: [id])
-  token1    Token    @relation("PoolToken1", fields: [token1Id], references: [id])
+  token0    Token      @relation("PoolToken0", fields: [token0Id], references: [id])
+  token1    Token      @relation("PoolToken1", fields: [token1Id], references: [id])
+  positions Position[]
 
   // Indexes for efficient queries
   @@index([protocol])
   @@index([poolType])
   @@index([token0Id])
   @@index([token1Id])
+}
+
+model Position {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Protocol identification
+  protocol     String // 'uniswapv3', etc.
+  positionType String // 'CL_TICKS'
+
+  // Data ownership
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // PnL related fields (stored as string for bigint precision)
+  currentValue     String // bigint as string
+  currentCostBasis String // bigint as string
+  realizedPnl      String // bigint as string
+  unrealizedPnl    String // bigint as string
+
+  // Cash flow related fields (stored as string for bigint precision)
+  collectedFees        String   // bigint as string
+  unClaimedFees        String   // bigint as string
+  lastFeesCollectedAt  DateTime
+
+  // Price range (stored as string for bigint precision)
+  priceRangeLower String // bigint as string
+  priceRangeUpper String // bigint as string
+
+  // Token roles
+  baseTokenId  String
+  baseToken    Token  @relation("PositionBaseToken", fields: [baseTokenId], references: [id])
+  quoteTokenId String
+  quoteToken   Token  @relation("PositionQuoteToken", fields: [quoteTokenId], references: [id])
+  poolId       String
+  pool         Pool   @relation(fields: [poolId], references: [id])
+
+  // Position state
+  positionOpenedAt DateTime
+  positionClosedAt DateTime?
+  isActive         Boolean
+
+  // Protocol-specific data (JSON)
+  config Json // Immutable: chainId, nftId, poolAddress, token0IsQuote, ticks, etc.
+  state  Json // Mutable: ownerAddress, liquidity, feeGrowth, tokensOwed, etc.
+
+  // Indexes for efficient queries
+  @@index([protocol])
+  @@index([positionType])
+  @@index([userId])
+  @@index([poolId])
+  @@index([baseTokenId])
+  @@index([quoteTokenId])
+  @@index([isActive])
 }

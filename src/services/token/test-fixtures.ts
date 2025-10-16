@@ -1,16 +1,16 @@
 /**
  * Test fixtures for TokenService tests
- * Provides reusable, realistic test data for token testing
+ * Provides reusable, realistic test data for ERC-20 token testing
  */
 
-import type { CreateAnyTokenInput } from '../types/token/token-input.js';
+import type { CreateTokenInput } from '../types/token/token-input.js';
 
 /**
- * Fixture structure for tokens
+ * Fixture structure for ERC-20 tokens
  * Contains both input (for create method) and dbResult (for mock return)
  */
 interface TokenFixture {
-  input: CreateAnyTokenInput;
+  input: CreateTokenInput<'erc20'>;
   dbResult: {
     id: string;
     createdAt: Date;
@@ -32,7 +32,7 @@ interface TokenFixture {
 
 export const USDC_ETHEREUM: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -48,7 +48,7 @@ export const USDC_ETHEREUM: TokenFixture = {
     id: 'token_usdc_eth_001',
     createdAt: new Date('2024-01-01T00:00:00Z'),
     updatedAt: new Date('2024-01-01T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -64,7 +64,7 @@ export const USDC_ETHEREUM: TokenFixture = {
 
 export const WETH_ETHEREUM: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Wrapped Ether',
     symbol: 'WETH',
     decimals: 18,
@@ -80,7 +80,7 @@ export const WETH_ETHEREUM: TokenFixture = {
     id: 'token_weth_eth_001',
     createdAt: new Date('2024-01-02T00:00:00Z'),
     updatedAt: new Date('2024-01-02T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Wrapped Ether',
     symbol: 'WETH',
     decimals: 18,
@@ -96,7 +96,7 @@ export const WETH_ETHEREUM: TokenFixture = {
 
 export const DAI_ETHEREUM: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Dai Stablecoin',
     symbol: 'DAI',
     decimals: 18,
@@ -110,7 +110,7 @@ export const DAI_ETHEREUM: TokenFixture = {
     id: 'token_dai_eth_001',
     createdAt: new Date('2024-01-03T00:00:00Z'),
     updatedAt: new Date('2024-01-03T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Dai Stablecoin',
     symbol: 'DAI',
     decimals: 18,
@@ -130,7 +130,7 @@ export const DAI_ETHEREUM: TokenFixture = {
 
 export const USDC_ARBITRUM: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -143,7 +143,7 @@ export const USDC_ARBITRUM: TokenFixture = {
     id: 'token_usdc_arb_001',
     createdAt: new Date('2024-01-04T00:00:00Z'),
     updatedAt: new Date('2024-01-04T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -159,7 +159,7 @@ export const USDC_ARBITRUM: TokenFixture = {
 
 export const USDC_BASE: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -172,7 +172,7 @@ export const USDC_BASE: TokenFixture = {
     id: 'token_usdc_base_001',
     createdAt: new Date('2024-01-05T00:00:00Z'),
     updatedAt: new Date('2024-01-05T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'USD Coin',
     symbol: 'USDC',
     decimals: 6,
@@ -187,75 +187,12 @@ export const USDC_BASE: TokenFixture = {
 };
 
 // ============================================================================
-// Solana Token Fixtures
-// ============================================================================
-
-export const WSOL_SOLANA: TokenFixture = {
-  input: {
-    tokenType: 'solana-spl',
-    name: 'Wrapped SOL',
-    symbol: 'SOL',
-    decimals: 9,
-    logoUrl: 'https://example.com/sol.png',
-    coingeckoId: 'solana',
-    marketCap: 90000000000,
-    config: {
-      mint: 'So11111111111111111111111111111111111111112',
-    },
-  },
-  dbResult: {
-    id: 'token_wsol_sol_001',
-    createdAt: new Date('2024-01-06T00:00:00Z'),
-    updatedAt: new Date('2024-01-06T00:00:00Z'),
-    tokenType: 'solana-spl',
-    name: 'Wrapped SOL',
-    symbol: 'SOL',
-    decimals: 9,
-    logoUrl: 'https://example.com/sol.png',
-    coingeckoId: 'solana',
-    marketCap: 90000000000,
-    config: {
-      mint: 'So11111111111111111111111111111111111111112',
-    },
-  },
-};
-
-export const USDC_SOLANA: TokenFixture = {
-  input: {
-    tokenType: 'solana-spl',
-    name: 'USD Coin',
-    symbol: 'USDC',
-    decimals: 6,
-    config: {
-      mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-    },
-  },
-  dbResult: {
-    id: 'token_usdc_sol_001',
-    createdAt: new Date('2024-01-07T00:00:00Z'),
-    updatedAt: new Date('2024-01-07T00:00:00Z'),
-    tokenType: 'solana-spl',
-    name: 'USD Coin',
-    symbol: 'USDC',
-    decimals: 6,
-    logoUrl: null,
-    coingeckoId: null,
-    marketCap: null,
-    config: {
-      mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-    },
-  },
-};
-
-// ============================================================================
 // Edge Case Fixtures
 // ============================================================================
 
 export const MINIMAL_ERC20: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Minimal Token',
     symbol: 'MIN',
     decimals: 18,
@@ -268,7 +205,7 @@ export const MINIMAL_ERC20: TokenFixture = {
     id: 'token_min_001',
     createdAt: new Date('2024-01-08T00:00:00Z'),
     updatedAt: new Date('2024-01-08T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Minimal Token',
     symbol: 'MIN',
     decimals: 18,
@@ -284,7 +221,7 @@ export const MINIMAL_ERC20: TokenFixture = {
 
 export const SPECIAL_CHARS_TOKEN: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Ether.fi Staked ETH',
     symbol: '$MEME',
     decimals: 18,
@@ -297,7 +234,7 @@ export const SPECIAL_CHARS_TOKEN: TokenFixture = {
     id: 'token_special_001',
     createdAt: new Date('2024-01-09T00:00:00Z'),
     updatedAt: new Date('2024-01-09T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Ether.fi Staked ETH',
     symbol: '$MEME',
     decimals: 18,
@@ -313,7 +250,7 @@ export const SPECIAL_CHARS_TOKEN: TokenFixture = {
 
 export const ZERO_MARKET_CAP_TOKEN: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Dead Token',
     symbol: 'DEAD',
     decimals: 18,
@@ -327,7 +264,7 @@ export const ZERO_MARKET_CAP_TOKEN: TokenFixture = {
     id: 'token_dead_001',
     createdAt: new Date('2024-01-10T00:00:00Z'),
     updatedAt: new Date('2024-01-10T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Dead Token',
     symbol: 'DEAD',
     decimals: 18,
@@ -343,7 +280,7 @@ export const ZERO_MARKET_CAP_TOKEN: TokenFixture = {
 
 export const HIGH_DECIMALS_TOKEN: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'High Decimals Token',
     symbol: 'HDT',
     decimals: 24,
@@ -356,7 +293,7 @@ export const HIGH_DECIMALS_TOKEN: TokenFixture = {
     id: 'token_hdt_001',
     createdAt: new Date('2024-01-11T00:00:00Z'),
     updatedAt: new Date('2024-01-11T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'High Decimals Token',
     symbol: 'HDT',
     decimals: 24,
@@ -372,7 +309,7 @@ export const HIGH_DECIMALS_TOKEN: TokenFixture = {
 
 export const ZERO_DECIMALS_TOKEN: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Zero Decimals Token',
     symbol: 'ZDT',
     decimals: 0,
@@ -385,7 +322,7 @@ export const ZERO_DECIMALS_TOKEN: TokenFixture = {
     id: 'token_zdt_001',
     createdAt: new Date('2024-01-12T00:00:00Z'),
     updatedAt: new Date('2024-01-12T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Zero Decimals Token',
     symbol: 'ZDT',
     decimals: 0,
@@ -409,7 +346,7 @@ export const ZERO_DECIMALS_TOKEN: TokenFixture = {
  */
 export const DISCOVERED_TOKEN: TokenFixture = {
   input: {
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Discovered Token',
     symbol: 'DISC',
     decimals: 18,
@@ -422,7 +359,7 @@ export const DISCOVERED_TOKEN: TokenFixture = {
     id: 'token_discovered_001',
     createdAt: new Date('2024-01-13T00:00:00Z'),
     updatedAt: new Date('2024-01-13T00:00:00Z'),
-    tokenType: 'evm-erc20',
+    tokenType: 'erc20',
     name: 'Discovered Token',
     symbol: 'DISC',
     decimals: 18,
@@ -457,11 +394,6 @@ export const ERC20_FIXTURES = {
   USDC_BASE,
 } as const;
 
-export const SOLANA_FIXTURES = {
-  WSOL_SOLANA,
-  USDC_SOLANA,
-} as const;
-
 export const EDGE_CASE_FIXTURES = {
   MINIMAL_ERC20,
   SPECIAL_CHARS_TOKEN,
@@ -477,7 +409,6 @@ export const DISCOVERY_FIXTURES = {
 
 export const ALL_FIXTURES = {
   ...ERC20_FIXTURES,
-  ...SOLANA_FIXTURES,
   ...EDGE_CASE_FIXTURES,
   ...DISCOVERY_FIXTURES,
 } as const;
@@ -491,7 +422,7 @@ export const ALL_FIXTURES = {
  * Useful for creating ad-hoc test data
  */
 export function createTokenFixture(
-  overrides: Partial<CreateAnyTokenInput>
+  overrides: Partial<CreateTokenInput<'erc20'>>
 ): TokenFixture {
   const base = USDC_ETHEREUM;
   const timestamp = new Date();

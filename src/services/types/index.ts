@@ -3,16 +3,21 @@
  * Database-specific types and conversion utilities (not shared with UI)
  */
 
+// User input types
+export type { CreateUserInput, UpdateUserInput } from './user/index.js';
+
 // Token input types
 export type {
   CreateTokenInput,
   UpdateTokenInput,
   CreateErc20TokenInput,
-  CreateSolanaTokenInput,
   CreateAnyTokenInput,
   UpdateErc20TokenInput,
-  UpdateSolanaTokenInput,
   UpdateAnyTokenInput,
+  TokenDiscoverInputMap,
+  TokenDiscoverInput,
+  Erc20TokenDiscoverInput,
+  AnyTokenDiscoverInput,
 } from './token/index.js';
 
 // Pool input types
@@ -20,6 +25,14 @@ export type {
   CreatePoolInput,
   UpdatePoolStateInput,
 } from './pool/index.js';
+
+// Position input types
+export type {
+  CreatePositionInput,
+  UpdatePositionInput,
+  UniswapV3PositionDiscoverInput,
+  PositionDiscoverInput,
+} from './position/index.js';
 
 // Uniswap V3 service types
 export type { UniswapV3PoolStateDB } from './uniswapv3/index.js';

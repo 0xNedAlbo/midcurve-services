@@ -89,7 +89,7 @@ describe('Erc20TokenService', () => {
 
       it('should normalize lowercase address', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test Token',
           symbol: 'TEST',
           decimals: 18,
@@ -107,7 +107,7 @@ describe('Erc20TokenService', () => {
           id: 'token_test',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -131,7 +131,7 @@ describe('Erc20TokenService', () => {
 
       it('should normalize mixed case address', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test Token',
           symbol: 'TEST',
           decimals: 18,
@@ -149,7 +149,7 @@ describe('Erc20TokenService', () => {
           id: 'token_test',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -173,7 +173,7 @@ describe('Erc20TokenService', () => {
 
       it('should handle optional fields', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test Token',
           symbol: 'TEST',
           decimals: 18,
@@ -194,7 +194,7 @@ describe('Erc20TokenService', () => {
           id: 'token_test',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -215,7 +215,7 @@ describe('Erc20TokenService', () => {
 
       it('should allow same address on different chains', async () => {
         const inputEth = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'USDC',
           symbol: 'USDC',
           decimals: 6,
@@ -241,7 +241,7 @@ describe('Erc20TokenService', () => {
           id: 'token_usdc_arb',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: inputArb.name,
           symbol: inputArb.symbol,
           decimals: inputArb.decimals,
@@ -260,7 +260,7 @@ describe('Erc20TokenService', () => {
 
       it('should handle tokens with special characters', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Token 中文 🚀',
           symbol: '$MEME',
           decimals: 18,
@@ -278,7 +278,7 @@ describe('Erc20TokenService', () => {
           id: 'token_special',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -300,7 +300,7 @@ describe('Erc20TokenService', () => {
     describe('validation errors', () => {
       it('should throw error for invalid address format', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test',
           symbol: 'TEST',
           decimals: 18,
@@ -321,7 +321,7 @@ describe('Erc20TokenService', () => {
 
       it('should throw error for too short address', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test',
           symbol: 'TEST',
           decimals: 18,
@@ -338,7 +338,7 @@ describe('Erc20TokenService', () => {
 
       it('should throw error for address without 0x prefix', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Test',
           symbol: 'TEST',
           decimals: 18,
@@ -357,7 +357,7 @@ describe('Erc20TokenService', () => {
     describe('edge cases', () => {
       it('should handle zero decimals', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Zero Decimals',
           symbol: 'ZERO',
           decimals: 0,
@@ -375,7 +375,7 @@ describe('Erc20TokenService', () => {
           id: 'token_zero',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -394,7 +394,7 @@ describe('Erc20TokenService', () => {
 
       it('should handle high decimals', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'High Decimals',
           symbol: 'HIGH',
           decimals: 77,
@@ -412,7 +412,7 @@ describe('Erc20TokenService', () => {
           id: 'token_high',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -431,7 +431,7 @@ describe('Erc20TokenService', () => {
 
       it('should handle zero marketCap', async () => {
         const input = {
-          tokenType: 'evm-erc20' as const,
+          tokenType: 'erc20' as const,
           name: 'Zero MarketCap',
           symbol: 'ZMC',
           decimals: 18,
@@ -450,7 +450,7 @@ describe('Erc20TokenService', () => {
           id: 'token_zmc',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: input.name,
           symbol: input.symbol,
           decimals: input.decimals,
@@ -566,7 +566,7 @@ describe('Erc20TokenService', () => {
           id: 'token_usdc_eth',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: 'USDC',
           symbol: 'USDC',
           decimals: 6,
@@ -648,7 +648,7 @@ describe('Erc20TokenService', () => {
       // Verify
       expect(result).not.toBeNull();
       expect(result?.symbol).toBe('USDC');
-      expect(result?.tokenType).toBe('evm-erc20');
+      expect(result?.tokenType).toBe('erc20');
     });
 
     it('should return null when token not found', async () => {
@@ -693,7 +693,7 @@ describe('Erc20TokenService', () => {
         id: 'token_complete',
         createdAt: new Date('2024-01-01'),
         updatedAt: new Date('2024-01-02'),
-        tokenType: 'evm-erc20',
+        tokenType: 'erc20',
         name: 'Complete Token',
         symbol: 'COMP',
         decimals: 18,
@@ -729,7 +729,7 @@ describe('Erc20TokenService', () => {
         id: 'token_minimal',
         createdAt: new Date(),
         updatedAt: new Date(),
-        tokenType: 'evm-erc20',
+        tokenType: 'erc20',
         name: 'Minimal Token',
         symbol: 'MIN',
         decimals: 18,
@@ -760,7 +760,7 @@ describe('Erc20TokenService', () => {
         id: 'token_dates',
         createdAt: createdDate,
         updatedAt: updatedDate,
-        tokenType: 'evm-erc20',
+        tokenType: 'erc20',
         name: 'Date Token',
         symbol: 'DATE',
         decimals: 18,
@@ -1150,12 +1150,12 @@ describe('Erc20TokenService', () => {
   // Token Discovery Tests
   // ==========================================================================
 
-  describe('discoverToken', () => {
+  describe('discover', () => {
     describe('successful discovery', () => {
       it('should discover new token from contract', async () => {
         const { input, dbResult } = DISCOVERED_TOKEN;
 
-        // Mock: Token doesn't exist in DB (both checks: in discoverToken and in create)
+        // Mock: Token doesn't exist in DB (both checks: in discover and in create)
         prismaMock.token.findFirst.mockResolvedValue(null);
 
         // Mock: Chain is supported
@@ -1178,17 +1178,17 @@ describe('Erc20TokenService', () => {
         prismaMock.token.create.mockResolvedValue(dbResult);
 
         // Execute
-        const result = await service.discoverToken(
-          input.config.address,
-          input.config.chainId
-        );
+        const result = await service.discover({
+          address: input.config.address,
+          chainId: input.config.chainId,
+        });
 
         // Verify
         expect(result.name).toBe('Discovered Token');
         expect(result.symbol).toBe('DISC');
         expect(result.decimals).toBe(18);
 
-        // Verify DB lookup was attempted (twice: once in discoverToken, once in create's duplicate check)
+        // Verify DB lookup was attempted (twice: once in discover, once in create's duplicate check)
         expect(prismaMock.token.findFirst).toHaveBeenCalledTimes(2);
 
         // Verify chain support check
@@ -1211,10 +1211,10 @@ describe('Erc20TokenService', () => {
         prismaMock.token.findFirst.mockResolvedValue(dbResult);
 
         // Execute
-        const result = await service.discoverToken(
-          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-          1
-        );
+        const result = await service.discover({
+          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          chainId: 1,
+        });
 
         // Verify
         expect(result.symbol).toBe('USDC');
@@ -1236,10 +1236,10 @@ describe('Erc20TokenService', () => {
         prismaMock.token.findFirst.mockResolvedValue(dbResult);
 
         // Execute with lowercase address
-        await service.discoverToken(
-          '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
-          1
-        );
+        await service.discover({
+          address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+          chainId: 1,
+        });
 
         // Verify findFirst was called with normalized (checksummed) address
         expect(prismaMock.token.findFirst).toHaveBeenCalledWith(
@@ -1287,7 +1287,7 @@ describe('Erc20TokenService', () => {
           id: 'token_special',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           ...tokenWithSpecialChars,
           logoUrl: null,
           coingeckoId: null,
@@ -1299,10 +1299,10 @@ describe('Erc20TokenService', () => {
         });
 
         // Execute
-        const result = await service.discoverToken(
-          tokenWithSpecialChars.address,
-          tokenWithSpecialChars.chainId
-        );
+        const result = await service.discover({
+          address: tokenWithSpecialChars.address,
+          chainId: tokenWithSpecialChars.chainId,
+        });
 
         // Verify special characters preserved
         expect(result.name).toBe('Token 中文 🚀');
@@ -1313,7 +1313,7 @@ describe('Erc20TokenService', () => {
     describe('validation errors', () => {
       it('should throw error for invalid address format', async () => {
         await expect(
-          service.discoverToken('invalid-address', 1)
+          service.discover({ address: 'invalid-address', chainId: 1 })
         ).rejects.toThrow('Invalid Ethereum address format');
 
         // Should fail before DB lookup
@@ -1321,17 +1321,17 @@ describe('Erc20TokenService', () => {
       });
 
       it('should throw error for too short address', async () => {
-        await expect(service.discoverToken('0x123', 1)).rejects.toThrow(
+        await expect(service.discover({ address: '0x123', chainId: 1 })).rejects.toThrow(
           'Invalid Ethereum address format'
         );
       });
 
       it('should throw error for address without 0x prefix', async () => {
         await expect(
-          service.discoverToken(
-            'A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-            1
-          )
+          service.discover({
+            address: 'A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            chainId: 1,
+          })
         ).rejects.toThrow('Invalid Ethereum address format');
       });
 
@@ -1344,17 +1344,11 @@ describe('Erc20TokenService', () => {
         evmConfigMock.getSupportedChainIds.mockReturnValue([1, 42161]);
 
         await expect(
-          service.discoverToken(
-            '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-            999999
-          )
+          service.discover({ address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 999999 })
         ).rejects.toThrow('Chain 999999 is not configured');
 
         await expect(
-          service.discoverToken(
-            '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-            999999
-          )
+          service.discover({ address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 999999 })
         ).rejects.toThrow('Supported chains: 1, 42161');
       });
     });
@@ -1376,14 +1370,14 @@ describe('Erc20TokenService', () => {
         publicClientMock.multicall.mockResolvedValue(['', 'TOKEN', 18]);
 
         await expect(
-          service.discoverToken(
+          service.discover(
             NON_COMPLIANT_TOKEN.address,
             NON_COMPLIANT_TOKEN.chainId
           )
         ).rejects.toThrow(TokenMetadataError);
 
         await expect(
-          service.discoverToken(
+          service.discover(
             NON_COMPLIANT_TOKEN.address,
             NON_COMPLIANT_TOKEN.chainId
           )
@@ -1407,17 +1401,11 @@ describe('Erc20TokenService', () => {
         publicClientMock.multicall.mockRejectedValue(revertError);
 
         await expect(
-          service.discoverToken(
-            '0x9999999999999999999999999999999999999999',
-            1
-          )
+          service.discover({ address: '0x9999999999999999999999999999999999999999', chainId: 1 })
         ).rejects.toThrow(TokenMetadataError);
 
         await expect(
-          service.discoverToken(
-            '0x9999999999999999999999999999999999999999',
-            1
-          )
+          service.discover({ address: '0x9999999999999999999999999999999999999999', chainId: 1 })
         ).rejects.toThrow('execution reverted');
       });
 
@@ -1438,10 +1426,7 @@ describe('Erc20TokenService', () => {
         publicClientMock.multicall.mockRejectedValue(codeNotFoundError);
 
         await expect(
-          service.discoverToken(
-            '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            1
-          )
+          service.discover({ address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', chainId: 1 })
         ).rejects.toThrow(TokenMetadataError);
       });
 
@@ -1462,17 +1447,11 @@ describe('Erc20TokenService', () => {
         publicClientMock.multicall.mockRejectedValue(networkError);
 
         await expect(
-          service.discoverToken(
-            '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            1
-          )
+          service.discover({ address: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', chainId: 1 })
         ).rejects.toThrow(TokenMetadataError);
 
         await expect(
-          service.discoverToken(
-            '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            1
-          )
+          service.discover({ address: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', chainId: 1 })
         ).rejects.toThrow('Network request failed');
       });
     });
@@ -1502,7 +1481,7 @@ describe('Erc20TokenService', () => {
           id: 'token_zero',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: 'Zero Decimals',
           symbol: 'ZERO',
           decimals: 0,
@@ -1515,10 +1494,7 @@ describe('Erc20TokenService', () => {
           },
         });
 
-        const result = await service.discoverToken(
-          '0xcccccccccccccccccccccccccccccccccccccccc',
-          1
-        );
+        const result = await service.discover({ address: '0xcccccccccccccccccccccccccccccccccccccccc', chainId: 1 });
 
         expect(result.decimals).toBe(0);
       });
@@ -1543,7 +1519,7 @@ describe('Erc20TokenService', () => {
           id: 'token_usdc_arb',
           createdAt: new Date(),
           updatedAt: new Date(),
-          tokenType: 'evm-erc20',
+          tokenType: 'erc20',
           name: 'USDC',
           symbol: 'USDC',
           decimals: 6,
@@ -1556,10 +1532,7 @@ describe('Erc20TokenService', () => {
           },
         });
 
-        const result = await service.discoverToken(
-          '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-          42161
-        );
+        const result = await service.discover({ address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chainId: 42161 });
 
         expect(result.config.chainId).toBe(42161);
         expect(evmConfigMock.getPublicClient).toHaveBeenCalledWith(42161);
@@ -1590,7 +1563,7 @@ describe('Erc20TokenService', () => {
         // Mock: Create
         prismaMock.token.create.mockResolvedValue(dbResult);
 
-        await service.discoverToken(input.config.address, input.config.chainId);
+        await service.discover({ address: input.config.address, chainId: input.config.chainId });
 
         // Should only call multicall once (efficient batch read)
         expect(publicClientMock.multicall).toHaveBeenCalledTimes(1);

@@ -7,9 +7,11 @@ export type {
   CreateTokenInput,
   UpdateTokenInput,
   CreateErc20TokenInput,
-  CreateSolanaTokenInput,
   CreateAnyTokenInput,
   UpdateErc20TokenInput,
-  UpdateSolanaTokenInput,
   UpdateAnyTokenInput,
+  TokenDiscoverInputMap,
+  TokenDiscoverInput,
+  Erc20TokenDiscoverInput,
+  AnyTokenDiscoverInput,
 } from './token-input.js';

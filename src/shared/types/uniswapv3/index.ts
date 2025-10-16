@@ -7,3 +7,9 @@ export type {
   UniswapV3PoolState,
   UniswapV3Pool,
 } from './pool.js';
+
+export type {
+  UniswapV3Position,
+  UniswapV3PositionConfig,
+  UniswapV3PositionState,
+} from './position.js';
