@@ -279,8 +279,36 @@ describe('TokenService - Integration Tests', () => {
       expect(afterDelete).toBeNull();
     });
 
-    it('should throw error when deleting non-existent token', async () => {
-      await expect(service.delete('non_existent_id')).rejects.toThrow();
+    it('should be idempotent - silently return when deleting non-existent token', async () => {
+      // Should not throw error
+      await expect(service.delete('non_existent_id')).resolves.not.toThrow();
+
+      // Verify it completes without error
+      await service.delete('non_existent_id');
+    });
+
+    it('should be idempotent - allow multiple deletes of same token', async () => {
+      // Create a token
+      const created = await service.create({
+        tokenType: 'erc20',
+        name: 'Test Token',
+        symbol: 'TEST',
+        decimals: 18,
+        config: {
+          address: '0x1234567890123456789012345678901234567890',
+          chainId: 1,
+        },
+      });
+
+      // First delete
+      await service.delete(created.id);
+
+      // Verify it's gone
+      const afterFirstDelete = await service.findById(created.id);
+      expect(afterFirstDelete).toBeNull();
+
+      // Second delete should not throw error (idempotent)
+      await expect(service.delete(created.id)).resolves.not.toThrow();
     });
   });
 

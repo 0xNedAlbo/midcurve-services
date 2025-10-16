@@ -584,10 +584,12 @@ export class Erc20TokenService extends TokenService<"erc20"> {
     /**
      * Delete an ERC-20 token
      *
-     * Validates token exists and is ERC-20 type before deletion.
+     * Validates token is ERC-20 type before deletion.
+     * This operation is idempotent for non-existent tokens (returns silently),
+     * but throws an error if attempting to delete a non-ERC-20 token (type safety).
      *
      * @param id - Token database ID
-     * @throws Error if token not found or not ERC-20 type
+     * @throws Error if token exists but is not ERC-20 type
      */
     override async delete(id: string): Promise<void> {
         log.methodEntry(this.logger, "delete", { id });
@@ -601,9 +603,9 @@ export class Erc20TokenService extends TokenService<"erc20"> {
             });
 
             if (!existing) {
-                const error = new Error(`Token with id ${id} not found`);
-                log.methodError(this.logger, "delete", error, { id });
-                throw error;
+                this.logger.debug({ id }, "Token not found, nothing to delete");
+                log.methodExit(this.logger, "delete", { id, found: false });
+                return; // Idempotent: silently return if token doesn't exist
             }
 
             if (existing.tokenType !== "erc20") {
@@ -630,8 +632,7 @@ export class Erc20TokenService extends TokenService<"erc20"> {
             if (
                 !(
                     error instanceof Error &&
-                    (error.message.includes("not found") ||
-                        error.message.includes("not an ERC-20 token"))
+                    error.message.includes("not an ERC-20 token")
                 )
             ) {
                 log.methodError(this.logger, "delete", error as Error, { id });

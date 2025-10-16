@@ -1061,19 +1061,18 @@ describe('Erc20TokenService', () => {
       });
     });
 
-    it('should throw error when token not found', async () => {
+    it('should be idempotent - silently return when token not found', async () => {
       // Mock: Token doesn't exist
       prismaMock.token.findUnique.mockResolvedValue(null);
 
-      await expect(service.delete('nonexistent_token')).rejects.toThrow(
-        'Token with id nonexistent_token not found'
-      );
+      // Should not throw error
+      await expect(service.delete('nonexistent_token')).resolves.toBeUndefined();
 
       // Verify delete was not attempted
       expect(prismaMock.token.delete).not.toHaveBeenCalled();
     });
 
-    it('should throw error when token is not ERC-20', async () => {
+    it('should throw error when token is not ERC-20 (type safety)', async () => {
       // Mock: Token exists but is Solana type
       prismaMock.token.findUnique.mockResolvedValue({
         id: 'token_sol_001',
@@ -1097,6 +1096,22 @@ describe('Erc20TokenService', () => {
 
       // Verify delete was not attempted
       expect(prismaMock.token.delete).not.toHaveBeenCalled();
+    });
+
+    it('should be idempotent - allow multiple deletes without error', async () => {
+      const { dbResult } = USDC_ETHEREUM;
+
+      // First call: Token exists
+      prismaMock.token.findUnique.mockResolvedValueOnce(dbResult);
+      prismaMock.token.delete.mockResolvedValue(dbResult);
+
+      await service.delete('token_usdc_eth_001');
+
+      // Second call: Token doesn't exist (already deleted)
+      prismaMock.token.findUnique.mockResolvedValueOnce(null);
+
+      // Should still succeed without error
+      await expect(service.delete('token_usdc_eth_001')).resolves.toBeUndefined();
     });
 
     it('should verify token type before deletion', async () => {

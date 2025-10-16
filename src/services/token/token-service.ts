@@ -343,8 +343,10 @@ export abstract class TokenService<T extends keyof TokenConfigMap> {
    * Derived classes should override this method to add type-specific
    * safeguards.
    *
+   * This operation is idempotent - deleting a non-existent token
+   * returns silently without error.
+   *
    * @param id - Token database ID
-   * @throws Error if token not found
    */
   async delete(id: string): Promise<void> {
     log.methodEntry(this.logger, 'delete', { id });
@@ -358,9 +360,9 @@ export abstract class TokenService<T extends keyof TokenConfigMap> {
       });
 
       if (!existing) {
-        const error = new Error(`Token with id ${id} not found`);
-        log.methodError(this.logger, 'delete', error, { id });
-        throw error;
+        this.logger.debug({ id }, 'Token not found, nothing to delete');
+        log.methodExit(this.logger, 'delete', { id, found: false });
+        return; // Idempotent: silently return if token doesn't exist
       }
 
       // Delete token
@@ -381,10 +383,7 @@ export abstract class TokenService<T extends keyof TokenConfigMap> {
 
       log.methodExit(this.logger, 'delete', { id });
     } catch (error) {
-      // Only log if not already logged
-      if (!(error instanceof Error && error.message.includes('not found'))) {
-        log.methodError(this.logger, 'delete', error as Error, { id });
-      }
+      log.methodError(this.logger, 'delete', error as Error, { id });
       throw error;
     }
   }

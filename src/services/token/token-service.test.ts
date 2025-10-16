@@ -223,12 +223,28 @@ describe('TokenService (Abstract Base)', () => {
       });
     });
 
-    it('should throw error when token not found', async () => {
+    it('should be idempotent - silently return when token not found', async () => {
       prismaMock.token.findUnique.mockResolvedValue(null);
 
-      await expect(tokenService.delete('nonexistent_token')).rejects.toThrow(
-        'Token with id nonexistent_token not found'
-      );
+      // Should not throw error
+      await expect(tokenService.delete('nonexistent_token')).resolves.toBeUndefined();
+
+      // Should not call prisma.token.delete
+      expect(prismaMock.token.delete).not.toHaveBeenCalled();
+    });
+
+    it('should be idempotent - allow multiple deletes without error', async () => {
+      // First call finds token
+      prismaMock.token.findUnique.mockResolvedValueOnce(USDC_ETHEREUM.dbResult);
+      prismaMock.token.delete.mockResolvedValue(USDC_ETHEREUM.dbResult);
+
+      await tokenService.delete('token_usdc_eth_001');
+
+      // Second call doesn't find token (already deleted)
+      prismaMock.token.findUnique.mockResolvedValueOnce(null);
+
+      // Should still succeed without error
+      await expect(tokenService.delete('token_usdc_eth_001')).resolves.toBeUndefined();
     });
   });
 });
