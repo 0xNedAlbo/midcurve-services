@@ -10,31 +10,33 @@
 
 import type { UniswapV3PositionConfig } from './uniswapv3/position-config.js';
 import type { UniswapV3PositionState } from './uniswapv3/position-state.js';
+import type { UniswapV3Pool } from './uniswapv3/pool.js';
 
 // Re-export for convenience
 export type { UniswapV3PositionConfig } from './uniswapv3/position-config.js';
 
 /**
- * Position Config/State Mapping
+ * Position Config/State/Pool Mapping
  *
- * Maps protocol identifiers to their corresponding config and state types.
+ * Maps protocol identifiers to their corresponding config, state, and pool types.
  * This ensures type safety: Position<'uniswapv3'> can only have
- * UniswapV3PositionConfig and UniswapV3PositionState.
+ * UniswapV3PositionConfig, UniswapV3PositionState, and UniswapV3Pool.
  *
  * When adding a new protocol:
  * 1. Create the config interface (e.g., OrcaPositionConfig)
  * 2. Create the state interface (e.g., OrcaPositionState)
- * 3. Add entry to this mapping: orca: { config: OrcaPositionConfig; state: OrcaPositionState }
+ * 3. Add entry to this mapping: orca: { config: OrcaPositionConfig; state: OrcaPositionState; pool: OrcaPool }
  */
 export interface PositionConfigMap {
   uniswapv3: {
     config: UniswapV3PositionConfig;
     state: UniswapV3PositionState;
+    pool: UniswapV3Pool;
   };
   // Future protocols:
-  // orca: { config: OrcaPositionConfig; state: OrcaPositionState };
-  // raydium: { config: RaydiumPositionConfig; state: RaydiumPositionState };
-  // pancakeswapv3: { config: PancakeSwapV3PositionConfig; state: PancakeSwapV3PositionState };
+  // orca: { config: OrcaPositionConfig; state: OrcaPositionState; pool: OrcaPool };
+  // raydium: { config: RaydiumPositionConfig; state: RaydiumPositionState; pool: RaydiumPool };
+  // pancakeswapv3: { config: PancakeSwapV3PositionConfig; state: PancakeSwapV3PositionState; pool: PancakeSwapV3Pool };
 }
 
 /**

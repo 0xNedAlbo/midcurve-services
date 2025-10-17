@@ -84,6 +84,7 @@ export type AnyPositionDiscoverInput =
  * - priceRangeLower, priceRangeUpper
  * - positionOpenedAt, positionClosedAt, isActive
  * - state (computed from on-chain data)
+ * - pool (replaced with poolId for database FK)
  *
  * Also omits database-generated fields: id, createdAt, updatedAt
  *
@@ -97,11 +98,12 @@ export type CreatePositionInput<P extends keyof PositionConfigMap> = Pick<
   | 'protocol'
   | 'positionType'
   | 'userId'
-  | 'baseTokenId'
-  | 'quoteTokenId'
-  | 'poolId'
+  | 'isToken0Quote'
   | 'config'
->;
+> & {
+  /** Pool ID for database foreign key (service maps this to full Pool object) */
+  poolId: string;
+};
 
 /**
  * Input type aliases for creating positions
@@ -114,17 +116,20 @@ export type CreateAnyPositionInput = CreatePositionInput<keyof PositionConfigMap
  *
  * All fields are optional (partial update).
  * Calculated fields are omitted (recomputed by service).
- * Immutable fields are omitted: id, userId, config, state, createdAt, updatedAt
+ * Immutable fields are omitted: id, userId, pool, isToken0Quote, config, state, createdAt, updatedAt
  *
  * Note: This is a basic helper for rare manual updates.
  * - Config updates are rare (position parameters are immutable on-chain)
  * - State updates should typically use refresh() method
- * - Token roles (baseToken, quoteToken) and pool are immutable - set at discovery
+ * - Token roles (isToken0Quote) and pool are immutable - set at discovery
+ *
+ * Currently, there are no mutable fields that can be updated directly.
+ * Most updates should use the refresh() method instead.
  *
  * @template P - Protocol key from PositionConfigMap ('uniswapv3', etc.)
  */
 export type UpdatePositionInput<P extends keyof PositionConfigMap> = Partial<
-  Pick<Position<P>, 'baseTokenId' | 'quoteTokenId' | 'poolId'>
+  Pick<Position<P>, never>
 >;
 
 /**

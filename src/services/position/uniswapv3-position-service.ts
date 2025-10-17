@@ -17,6 +17,21 @@ import type {
 } from '../types/position/position-input.js';
 import { PositionService } from './position-service.js';
 import { log } from '../../logging/index.js';
+import { EvmConfig } from '../../config/evm.js';
+import {
+  getPositionManagerAddress,
+  getFactoryAddress,
+  UNISWAP_V3_POSITION_MANAGER_ABI,
+  UNISWAP_V3_FACTORY_ABI,
+  type UniswapV3PositionData,
+} from '../../config/uniswapv3.js';
+import {
+  isValidAddress,
+  normalizeAddress,
+  compareAddresses,
+} from '../../utils/evm/index.js';
+import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
+import type { Address } from 'viem';
 
 /**
  * Dependencies for UniswapV3PositionService
@@ -28,6 +43,18 @@ export interface UniswapV3PositionServiceDependencies {
    * If not provided, a new PrismaClient instance will be created
    */
   prisma?: PrismaClient;
+
+  /**
+   * EVM configuration for chain RPC access
+   * If not provided, the singleton EvmConfig instance will be used
+   */
+  evmConfig?: EvmConfig;
+
+  /**
+   * UniswapV3 pool service for pool discovery
+   * If not provided, a new UniswapV3PoolService instance will be created
+   */
+  poolService?: UniswapV3PoolService;
 }
 
 /**
@@ -37,14 +64,37 @@ export interface UniswapV3PositionServiceDependencies {
  * Implements serialization methods for Uniswap V3-specific config and state types.
  */
 export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
+  private readonly _evmConfig: EvmConfig;
+  private readonly _poolService: UniswapV3PoolService;
+
   /**
    * Creates a new UniswapV3PositionService instance
    *
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
+   * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
+   * @param dependencies.poolService - UniswapV3 pool service (creates default if not provided)
    */
   constructor(dependencies: UniswapV3PositionServiceDependencies = {}) {
     super(dependencies);
+    this._evmConfig = dependencies.evmConfig ?? EvmConfig.getInstance();
+    this._poolService =
+      dependencies.poolService ??
+      new UniswapV3PoolService({ prisma: this.prisma });
+  }
+
+  /**
+   * Get the EVM configuration instance
+   */
+  protected get evmConfig(): EvmConfig {
+    return this._evmConfig;
+  }
+
+  /**
+   * Get the UniswapV3 pool service instance
+   */
+  protected get poolService(): UniswapV3PoolService {
+    return this._poolService;
   }
 
   // ============================================================================
@@ -65,7 +115,6 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       chainId: number;
       nftId: number;
       poolAddress: string;
-      token0IsQuote: boolean;
       tickUpper: number;
       tickLower: number;
     };
@@ -74,7 +123,6 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       chainId: db.chainId,
       nftId: db.nftId,
       poolAddress: db.poolAddress,
-      token0IsQuote: db.token0IsQuote,
       tickUpper: db.tickUpper,
       tickLower: db.tickLower,
     };
@@ -94,7 +142,6 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       chainId: config.chainId,
       nftId: config.nftId,
       poolAddress: config.poolAddress,
-      token0IsQuote: config.token0IsQuote,
       tickUpper: config.tickUpper,
       tickLower: config.tickLower,
     };
@@ -192,23 +239,315 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       quoteTokenAddress,
     });
 
-    // TODO: Implement discovery logic
-    // 1. Check database first (optimization) - search by userId + chainId + nftId
-    // 2. Validate quoteTokenAddress format
-    // 3. Read position data from NonfungiblePositionManager
-    // 4. Discover pool via UniswapV3PoolService
-    // 5. Determine base/quote tokens and set token0IsQuote
-    // 6. Calculate PnL and price ranges
-    // 7. Create position via create() method with userId
+    try {
+      // 1. Check database first (optimization)
+      const existing = await this.findByUserAndChainAndNftId(
+        userId,
+        chainId,
+        nftId
+      );
 
-    const error = new Error('discover() not yet implemented');
-    log.methodError(this.logger, 'discover', error, {
-      userId,
-      chainId,
-      nftId,
-      quoteTokenAddress,
-    });
-    throw error;
+      if (existing) {
+        this.logger.info(
+          {
+            id: existing.id,
+            userId,
+            chainId,
+            nftId,
+          },
+          'Position already exists, skipping on-chain discovery'
+        );
+        log.methodExit(this.logger, 'discover', {
+          id: existing.id,
+          fromDatabase: true,
+        });
+        return existing;
+      }
+
+      // 2. Validate quoteTokenAddress format
+      if (!isValidAddress(quoteTokenAddress)) {
+        const error = new Error(
+          `Invalid quote token address format: ${quoteTokenAddress}`
+        );
+        log.methodError(this.logger, 'discover', error, {
+          userId,
+          chainId,
+          nftId,
+          quoteTokenAddress,
+        });
+        throw error;
+      }
+
+      const normalizedQuoteAddress = normalizeAddress(quoteTokenAddress);
+      this.logger.debug(
+        { original: quoteTokenAddress, normalized: normalizedQuoteAddress },
+        'Quote token address normalized for discovery'
+      );
+
+      // 3. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(chainId)) {
+        const error = new Error(
+          `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+            .getSupportedChainIds()
+            .join(', ')}`
+        );
+        log.methodError(this.logger, 'discover', error, { chainId });
+        throw error;
+      }
+
+      this.logger.debug(
+        { chainId },
+        'Chain is supported, proceeding with on-chain discovery'
+      );
+
+      // 4. Read position data from NonfungiblePositionManager
+      const positionManagerAddress = getPositionManagerAddress(chainId);
+      const client = this.evmConfig.getPublicClient(chainId);
+
+      this.logger.debug(
+        { positionManagerAddress, nftId, chainId },
+        'Reading position data from NonfungiblePositionManager'
+      );
+
+      const [positionData, ownerAddress] = await Promise.all([
+        client.readContract({
+          address: positionManagerAddress,
+          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+          functionName: 'positions',
+          args: [BigInt(nftId)],
+        }) as Promise<
+          readonly [
+            bigint,
+            Address,
+            Address,
+            Address,
+            number,
+            number,
+            number,
+            bigint,
+            bigint,
+            bigint,
+            bigint,
+            bigint,
+          ]
+        >,
+        client.readContract({
+          address: positionManagerAddress,
+          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+          functionName: 'ownerOf',
+          args: [BigInt(nftId)],
+        }) as Promise<Address>,
+      ]);
+
+      // Parse position data
+      const position: UniswapV3PositionData = {
+        nonce: positionData[0],
+        operator: positionData[1],
+        token0: positionData[2],
+        token1: positionData[3],
+        fee: positionData[4],
+        tickLower: positionData[5],
+        tickUpper: positionData[6],
+        liquidity: positionData[7],
+        feeGrowthInside0LastX128: positionData[8],
+        feeGrowthInside1LastX128: positionData[9],
+        tokensOwed0: positionData[10],
+        tokensOwed1: positionData[11],
+      };
+
+      this.logger.debug(
+        {
+          token0: position.token0,
+          token1: position.token1,
+          fee: position.fee,
+          tickLower: position.tickLower,
+          tickUpper: position.tickUpper,
+          liquidity: position.liquidity.toString(),
+          owner: ownerAddress,
+        },
+        'Position data read from contract'
+      );
+
+      // 5. Compute pool address (UniswapV3 uses deterministic addressing)
+      // For now, we'll discover the pool from token addresses and fee
+      // Note: In production, you'd compute the pool address deterministically
+      // using the factory address and CREATE2
+      const poolAddress = await this.computePoolAddress(
+        chainId,
+        position.token0,
+        position.token1,
+        position.fee
+      );
+
+      this.logger.debug(
+        { poolAddress, token0: position.token0, token1: position.token1, fee: position.fee },
+        'Pool address computed/discovered'
+      );
+
+      // 6. Discover pool via UniswapV3PoolService
+      const pool = await this.poolService.discover({
+        poolAddress,
+        chainId,
+      });
+
+      this.logger.debug(
+        {
+          poolId: pool.id,
+          token0: pool.token0.symbol,
+          token1: pool.token1.symbol,
+        },
+        'Pool discovered/fetched'
+      );
+
+      // 7. Determine base/quote tokens and set token0IsQuote
+      const token0IsQuote =
+        compareAddresses(pool.token0.config.address, normalizedQuoteAddress) ===
+        0;
+      const token1IsQuote =
+        compareAddresses(pool.token1.config.address, normalizedQuoteAddress) ===
+        0;
+
+      if (!token0IsQuote && !token1IsQuote) {
+        const error = new Error(
+          `Quote token address ${normalizedQuoteAddress} does not match either pool token. ` +
+            `Pool token0: ${pool.token0.config.address}, token1: ${pool.token1.config.address}`
+        );
+        log.methodError(this.logger, 'discover', error, {
+          userId,
+          chainId,
+          nftId,
+          quoteTokenAddress: normalizedQuoteAddress,
+          poolToken0: pool.token0.config.address,
+          poolToken1: pool.token1.config.address,
+        });
+        throw error;
+      }
+
+      // 7. Determine token roles from boolean flag
+      const isToken0Quote = token0IsQuote;  // Already calculated earlier
+      const baseToken = isToken0Quote ? pool.token1 : pool.token0;
+      const quoteToken = isToken0Quote ? pool.token0 : pool.token1;
+
+      this.logger.debug(
+        {
+          isToken0Quote,
+          baseToken: baseToken.symbol,
+          quoteToken: quoteToken.symbol,
+        },
+        'Token roles determined'
+      );
+
+      // 8. Create position config (without token0IsQuote, now at position level)
+      const config: UniswapV3PositionConfig = {
+        chainId,
+        nftId,
+        poolAddress,
+        tickUpper: position.tickUpper,
+        tickLower: position.tickLower,
+      };
+
+      // 9. Create position via create() method
+      const createdPosition = await this.create({
+        protocol: 'uniswapv3',
+        positionType: 'CL_TICKS',
+        userId,
+        poolId: pool.id,
+        isToken0Quote,  // Boolean flag for token roles
+        config,
+      });
+
+      this.logger.info(
+        {
+          id: createdPosition.id,
+          userId,
+          chainId,
+          nftId,
+          poolId: pool.id,
+          baseToken: baseToken.symbol,
+          quoteToken: quoteToken.symbol,
+        },
+        'Position discovered and created'
+      );
+
+      log.methodExit(this.logger, 'discover', {
+        id: createdPosition.id,
+        fromDatabase: false,
+      });
+
+      return createdPosition;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          (error.message.includes('Invalid') ||
+            error.message.includes('Chain') ||
+            error.message.includes('Quote token'))
+        )
+      ) {
+        log.methodError(this.logger, 'discover', error as Error, {
+          userId,
+          chainId,
+          nftId,
+          quoteTokenAddress,
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Query the pool address for a given token pair and fee from the factory contract
+   *
+   * Uses the UniswapV3 Factory's getPool() function to retrieve the pool address.
+   * The factory returns the zero address if no pool exists for the given parameters.
+   *
+   * @param chainId - Chain ID
+   * @param token0 - Address of token0
+   * @param token1 - Address of token1
+   * @param fee - Fee tier in basis points
+   * @returns Pool address
+   * @throws Error if pool doesn't exist (factory returns zero address)
+   * @private
+   */
+  private async computePoolAddress(
+    chainId: number,
+    token0: Address,
+    token1: Address,
+    fee: number
+  ): Promise<string> {
+    const factoryAddress = getFactoryAddress(chainId);
+    const client = this.evmConfig.getPublicClient(chainId);
+
+    this.logger.debug(
+      { factoryAddress, token0, token1, fee, chainId },
+      'Querying factory for pool address'
+    );
+
+    const poolAddress = (await client.readContract({
+      address: factoryAddress,
+      abi: UNISWAP_V3_FACTORY_ABI,
+      functionName: 'getPool',
+      args: [token0, token1, fee],
+    })) as Address;
+
+    // Check if pool exists (factory returns zero address if pool doesn't exist)
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    if (
+      poolAddress.toLowerCase() === zeroAddress.toLowerCase() ||
+      poolAddress === zeroAddress
+    ) {
+      throw new Error(
+        `Pool does not exist for token0=${token0}, token1=${token1}, fee=${fee} on chain ${chainId}`
+      );
+    }
+
+    this.logger.debug(
+      { poolAddress, token0, token1, fee },
+      'Pool address retrieved from factory'
+    );
+
+    return normalizeAddress(poolAddress);
   }
 
   // ============================================================================
@@ -334,6 +673,14 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
 
       const result = await this.prisma.position.findUnique({
         where: { id },
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
       });
 
       if (!result) {
@@ -453,6 +800,14 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         config: {
           path: ['chainId'],
           equals: chainId,
+        },
+      },
+      include: {
+        pool: {
+          include: {
+            token0: true,
+            token1: true,
+          },
         },
       },
     });

@@ -29,13 +29,6 @@ export interface UniswapV3PositionConfig {
   poolAddress: string;
 
   /**
-   * Whether token0 is the quote token
-   * true: token0 is quote, token1 is base
-   * false: token1 is quote, token0 is base
-   */
-  token0IsQuote: boolean;
-
-  /**
    * Upper tick bound
    * The upper tick of the position's price range
    */

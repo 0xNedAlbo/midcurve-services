@@ -193,30 +193,44 @@ export interface Position<P extends keyof PositionConfigMap> {
   priceRangeUpper: bigint;
 
   // ============================================================================
-  // TOKEN ROLES
+  // POOL AND TOKEN ROLES
   // ============================================================================
 
   /**
-   * Base token ID
-   * Foreign key reference to Token.id
+   * Pool this position belongs to
+   * Full Pool object with embedded Token objects (token0, token1)
    *
-   * In a trading pair (e.g., ETH/USDC), the base token is the asset being priced.
+   * Type is determined by the protocol parameter P via PositionConfigMap.
+   * For Position<'uniswapv3'>, this will be UniswapV3Pool.
+   *
+   * The pool includes:
+   * - pool.token0: Full token object (including id, symbol, decimals, config, etc.)
+   * - pool.token1: Full token object
+   * - pool.config: Pool configuration (address, chainId, tickSpacing, etc.)
+   * - pool.state: Pool state (sqrtPriceX96, liquidity, currentTick, etc.)
    */
-  baseTokenId: string;
+  pool: PositionConfigMap[P]['pool'];
 
   /**
-   * Quote token ID
-   * Foreign key reference to Token.id
+   * Token role indicator
    *
-   * In a trading pair (e.g., ETH/USDC), the quote token is the unit of account.
+   * Determines which token in the pool is the quote token (unit of account):
+   * - true: token0 is quote, token1 is base
+   * - false: token0 is base, token1 is quote
+   *
+   * Use this to derive token roles:
+   * ```typescript
+   * const baseToken = position.isToken0Quote ? position.pool.token1 : position.pool.token0;
+   * const quoteToken = position.isToken0Quote ? position.pool.token0 : position.pool.token1;
+   * ```
+   *
+   * @example
+   * // ETH/USDC pool where USDC is quote
+   * // pool.token0 = USDC (0xA0b8...), pool.token1 = WETH (0xC02a...)
+   * // isToken0Quote = true
+   * // Therefore: baseToken = WETH, quoteToken = USDC
    */
-  quoteTokenId: string;
-
-  /**
-   * Pool ID
-   * Foreign key reference to Pool.id
-   */
-  poolId: string;
+  isToken0Quote: boolean;
 
   // ============================================================================
   // POSITION STATE
@@ -306,3 +320,49 @@ export type UniswapV3Position = Position<'uniswapv3'>;
  * Can be a position from any supported protocol.
  */
 export type AnyPosition = Position<keyof PositionConfigMap>;
+
+// ============================================================================
+// HELPER FUNCTIONS FOR TOKEN ROLE DERIVATION
+// ============================================================================
+
+/**
+ * Get the base token from a position
+ *
+ * The base token is the asset being priced (e.g., ETH in ETH/USDC).
+ *
+ * @param position - The position to get the base token from
+ * @returns The base token object
+ *
+ * @example
+ * ```typescript
+ * const position: UniswapV3Position = ...;
+ * const baseToken = getBaseToken(position);
+ * console.log(`Base: ${baseToken.symbol}`); // "WETH"
+ * ```
+ */
+export function getBaseToken<P extends keyof PositionConfigMap>(
+  position: Position<P>
+): Position<P>['pool']['token0'] {
+  return position.isToken0Quote ? position.pool.token1 : position.pool.token0;
+}
+
+/**
+ * Get the quote token from a position
+ *
+ * The quote token is the unit of account (e.g., USDC in ETH/USDC).
+ *
+ * @param position - The position to get the quote token from
+ * @returns The quote token object
+ *
+ * @example
+ * ```typescript
+ * const position: UniswapV3Position = ...;
+ * const quoteToken = getQuoteToken(position);
+ * console.log(`Quote: ${quoteToken.symbol}`); // "USDC"
+ * ```
+ */
+export function getQuoteToken<P extends keyof PositionConfigMap>(
+  position: Position<P>
+): Position<P>['pool']['token0'] {
+  return position.isToken0Quote ? position.pool.token0 : position.pool.token1;
+}

@@ -9,6 +9,7 @@ import type {
   UniswapV3PositionState,
   UniswapV3Position,
 } from '../../shared/types/uniswapv3/position.js';
+import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
 import type { Erc20Token } from '../../shared/types/token.js';
 
 /**
@@ -34,9 +35,9 @@ interface PositionFixture {
     lastFeesCollectedAt: Date;
     priceRangeLower: string;
     priceRangeUpper: string;
-    baseTokenId: string;
-    quoteTokenId: string;
     poolId: string;
+    isToken0Quote: boolean;
+    pool: any; // Pool with token0, token1 from include
     positionOpenedAt: Date;
     positionClosedAt: Date | null;
     isActive: boolean;
@@ -86,10 +87,34 @@ export const WETH_TOKEN: Erc20Token = {
 };
 
 // ============================================================================
-// Pool ID Fixtures
+// Pool Fixtures
 // ============================================================================
 
-export const USDC_WETH_POOL_ID = 'pool_usdc_weth_001';
+export const USDC_WETH_POOL: UniswapV3Pool = {
+  id: 'pool_usdc_weth_001',
+  createdAt: new Date('2024-01-01T00:00:00Z'),
+  updatedAt: new Date('2024-01-01T00:00:00Z'),
+  protocol: 'uniswapv3',
+  poolType: 'CL_TICKS',
+  token0: USDC_TOKEN,
+  token1: WETH_TOKEN,
+  feeBps: 500, // 0.05%
+  config: {
+    chainId: 1,
+    address: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+    token0: USDC_TOKEN.config.address,
+    token1: WETH_TOKEN.config.address,
+    feeBps: 500,
+    tickSpacing: 10,
+  },
+  state: {
+    sqrtPriceX96: 1771595571142957166518320255467n,
+    currentTick: 202347,
+    liquidity: 20000000000000000000n,
+    feeGrowthGlobal0: 123456789012345678901234567890n,
+    feeGrowthGlobal1: 987654321098765432109876543210n,
+  },
+};
 
 // ============================================================================
 // Position Config Fixtures
@@ -99,7 +124,6 @@ export const ACTIVE_POSITION_CONFIG: UniswapV3PositionConfig = {
   chainId: 1,
   nftId: 123456,
   poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-  token0IsQuote: true, // token0 = USDC (quote), token1 = WETH (base)
   tickLower: -887220,
   tickUpper: 887220,
 };
@@ -108,7 +132,6 @@ export const NARROW_POSITION_CONFIG: UniswapV3PositionConfig = {
   chainId: 1,
   nftId: 123457,
   poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-  token0IsQuote: true,
   tickLower: 200000,
   tickUpper: 205000,
 };
@@ -145,15 +168,15 @@ export const ZERO_POSITION_STATE: UniswapV3PositionState = {
  * - Pool: USDC/WETH 0.05%
  * - Range: Full range (-887220 to 887220)
  * - Status: Active with unclaimed fees
+ * - isToken0Quote: true (token0 = USDC is quote, token1 = WETH is base)
  */
 export const ACTIVE_ETH_USDC_POSITION: PositionFixture = {
   input: {
     protocol: 'uniswapv3',
     positionType: 'CL_TICKS',
     userId: TEST_USER_ID,
-    baseTokenId: WETH_TOKEN.id, // WETH is base
-    quoteTokenId: USDC_TOKEN.id, // USDC is quote
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true, // USDC (token0) is quote, WETH (token1) is base
     config: ACTIVE_POSITION_CONFIG,
     state: ACTIVE_POSITION_STATE,
   },
@@ -173,9 +196,9 @@ export const ACTIVE_ETH_USDC_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-06-01T00:00:00Z'),
     priceRangeLower: '1400000000', // 1400 USDC per ETH
     priceRangeUpper: '2000000000', // 2000 USDC per ETH
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    pool: USDC_WETH_POOL,
     positionOpenedAt: new Date('2024-05-01T00:00:00Z'),
     positionClosedAt: null,
     isActive: true,
@@ -183,7 +206,6 @@ export const ACTIVE_ETH_USDC_POSITION: PositionFixture = {
       chainId: 1,
       nftId: 123456,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: -887220,
       tickUpper: 887220,
     },
@@ -212,9 +234,8 @@ export const ACTIVE_ETH_USDC_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-06-01T00:00:00Z'),
     priceRangeLower: 1400000000n,
     priceRangeUpper: 2000000000n,
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    pool: USDC_WETH_POOL,
+    isToken0Quote: true,
     positionOpenedAt: new Date('2024-05-01T00:00:00Z'),
     positionClosedAt: null,
     isActive: true,
@@ -233,14 +254,12 @@ export const CLOSED_POSITION: PositionFixture = {
     protocol: 'uniswapv3',
     positionType: 'CL_TICKS',
     userId: TEST_USER_ID,
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
     config: {
       chainId: 1,
       nftId: 123458,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: -887220,
       tickUpper: 887220,
     },
@@ -262,9 +281,9 @@ export const CLOSED_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-05-01T00:00:00Z'),
     priceRangeLower: '1400000000',
     priceRangeUpper: '2000000000',
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    pool: USDC_WETH_POOL,
     positionOpenedAt: new Date('2024-03-01T00:00:00Z'),
     positionClosedAt: new Date('2024-05-01T00:00:00Z'),
     isActive: false,
@@ -272,7 +291,6 @@ export const CLOSED_POSITION: PositionFixture = {
       chainId: 1,
       nftId: 123458,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: -887220,
       tickUpper: 887220,
     },
@@ -301,9 +319,8 @@ export const CLOSED_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-05-01T00:00:00Z'),
     priceRangeLower: 1400000000n,
     priceRangeUpper: 2000000000n,
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    pool: USDC_WETH_POOL,
+    isToken0Quote: true,
     positionOpenedAt: new Date('2024-03-01T00:00:00Z'),
     positionClosedAt: new Date('2024-05-01T00:00:00Z'),
     isActive: false,
@@ -311,7 +328,6 @@ export const CLOSED_POSITION: PositionFixture = {
       chainId: 1,
       nftId: 123458,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: -887220,
       tickUpper: 887220,
     },
@@ -328,14 +344,12 @@ export const BOB_POSITION: PositionFixture = {
     protocol: 'uniswapv3',
     positionType: 'CL_TICKS',
     userId: TEST_USER_ID_2,
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
     config: {
       chainId: 1,
       nftId: 456789,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: 200000,
       tickUpper: 205000,
     },
@@ -364,9 +378,9 @@ export const BOB_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-06-15T00:00:00Z'),
     priceRangeLower: '1600000000',
     priceRangeUpper: '1700000000',
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    pool: USDC_WETH_POOL,
     positionOpenedAt: new Date('2024-06-01T00:00:00Z'),
     positionClosedAt: null,
     isActive: true,
@@ -374,7 +388,6 @@ export const BOB_POSITION: PositionFixture = {
       chainId: 1,
       nftId: 456789,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: 200000,
       tickUpper: 205000,
     },
@@ -403,9 +416,8 @@ export const BOB_POSITION: PositionFixture = {
     lastFeesCollectedAt: new Date('2024-06-15T00:00:00Z'),
     priceRangeLower: 1600000000n,
     priceRangeUpper: 1700000000n,
-    baseTokenId: WETH_TOKEN.id,
-    quoteTokenId: USDC_TOKEN.id,
-    poolId: USDC_WETH_POOL_ID,
+    pool: USDC_WETH_POOL,
+    isToken0Quote: true,
     positionOpenedAt: new Date('2024-06-01T00:00:00Z'),
     positionClosedAt: null,
     isActive: true,
@@ -413,7 +425,6 @@ export const BOB_POSITION: PositionFixture = {
       chainId: 1,
       nftId: 456789,
       poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-      token0IsQuote: true,
       tickLower: 200000,
       tickUpper: 205000,
     },

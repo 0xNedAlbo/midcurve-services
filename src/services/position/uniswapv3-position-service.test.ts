@@ -39,7 +39,6 @@ describe('UniswapV3PositionService', () => {
         chainId: 1,
         nftId: 123456,
         poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-        token0IsQuote: true,
         tickLower: -887220,
         tickUpper: 887220,
       };
@@ -49,7 +48,6 @@ describe('UniswapV3PositionService', () => {
       expect(result.chainId).toBe(1);
       expect(result.nftId).toBe(123456);
       expect(result.poolAddress).toBe('0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640');
-      expect(result.token0IsQuote).toBe(true);
       expect(result.tickLower).toBe(-887220);
       expect(result.tickUpper).toBe(887220);
     });
@@ -63,7 +61,6 @@ describe('UniswapV3PositionService', () => {
         chainId: 1,
         nftId: 123456,
         poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
-        token0IsQuote: true,
         tickLower: -887220,
         tickUpper: 887220,
       });
@@ -261,6 +258,14 @@ describe('UniswapV3PositionService', () => {
       expect(result!.currentValue).toBe(1500000000n); // bigint parsed
       expect(prismaMock.position.findUnique).toHaveBeenCalledWith({
         where: { id: 'position_001' },
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
       });
     });
 
@@ -322,37 +327,38 @@ describe('UniswapV3PositionService', () => {
   // ==========================================================================
 
   describe('update', () => {
-    it('should update position fields', async () => {
-      prismaMock.position.update.mockResolvedValue({
-        ...ACTIVE_ETH_USDC_POSITION.dbResult,
-        baseTokenId: 'new_base_token_id',
-      } as any);
-
-      const result = await service.update('position_001', {
-        baseTokenId: 'new_base_token_id',
-      });
-
-      expect(result).toBeDefined();
-      expect(result.baseTokenId).toBe('new_base_token_id');
-      expect(prismaMock.position.update).toHaveBeenCalledWith({
-        where: { id: 'position_001' },
-        data: { baseTokenId: 'new_base_token_id' },
-      });
-    });
-
-    it('should handle partial updates', async () => {
+    it('should update position (no-op when no mutable fields)', async () => {
       prismaMock.position.update.mockResolvedValue(
         ACTIVE_ETH_USDC_POSITION.dbResult as any
       );
 
-      await service.update('position_001', {
-        quoteTokenId: 'new_quote_token_id',
+      const result = await service.update('position_001', {});
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe('position_001');
+      expect(prismaMock.position.update).toHaveBeenCalledWith({
+        where: { id: 'position_001' },
+        data: {},
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
       });
+    });
+
+    it('should handle empty updates', async () => {
+      prismaMock.position.update.mockResolvedValue(
+        ACTIVE_ETH_USDC_POSITION.dbResult as any
+      );
+
+      await service.update('position_001', {});
 
       const updateCall = prismaMock.position.update.mock.calls[0][0];
-      expect(updateCall.data).toEqual({
-        quoteTokenId: 'new_quote_token_id',
-      });
+      expect(updateCall.data).toEqual({});
     });
 
     it('should throw error if position not found', async () => {
@@ -361,9 +367,7 @@ describe('UniswapV3PositionService', () => {
         message: 'Record not found',
       });
 
-      await expect(
-        service.update('nonexistent', { poolId: 'new_pool' })
-      ).rejects.toThrow();
+      await expect(service.update('nonexistent', {})).rejects.toThrow();
     });
   });
 

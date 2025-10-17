@@ -50,9 +50,9 @@ interface PositionDbResult {
   lastFeesCollectedAt: Date;
   priceRangeLower: string;
   priceRangeUpper: string;
-  baseTokenId: string;
-  quoteTokenId: string;
   poolId: string;
+  isToken0Quote: boolean;
+  pool: any; // Pool with token0, token1 from include
   positionOpenedAt: Date;
   positionClosedAt: Date | null;
   isActive: boolean;
@@ -258,9 +258,8 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
           protocol: input.protocol,
           positionType: input.positionType,
           userId: input.userId,
-          baseTokenId: input.baseTokenId,
-          quoteTokenId: input.quoteTokenId,
           poolId: input.poolId,
+          isToken0Quote: input.isToken0Quote,
           config: configDB as object,
           state: stateDB as object,
           // Default calculated values
@@ -276,6 +275,14 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
           positionOpenedAt: now,
           positionClosedAt: null,
           isActive: true,
+        },
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
         },
       });
 
@@ -319,6 +326,14 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
 
       const result = await this.prisma.position.findUnique({
         where: { id },
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
       });
 
       if (!result) {
@@ -357,19 +372,9 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
     log.methodEntry(this.logger, 'update', { id, input });
 
     try {
+      // Currently, UpdatePositionInput<P> has no mutable fields
+      // All updates should use refresh() method for state updates
       const data: any = {};
-
-      if (input.baseTokenId !== undefined) {
-        data.baseTokenId = input.baseTokenId;
-      }
-
-      if (input.quoteTokenId !== undefined) {
-        data.quoteTokenId = input.quoteTokenId;
-      }
-
-      if (input.poolId !== undefined) {
-        data.poolId = input.poolId;
-      }
 
       log.dbOperation(this.logger, 'update', 'Position', {
         id,
@@ -379,6 +384,14 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
       const result = await this.prisma.position.update({
         where: { id },
         data,
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
       });
 
       // Map to Position type
@@ -456,9 +469,8 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
       lastFeesCollectedAt: dbResult.lastFeesCollectedAt,
       priceRangeLower: BigInt(dbResult.priceRangeLower),
       priceRangeUpper: BigInt(dbResult.priceRangeUpper),
-      baseTokenId: dbResult.baseTokenId,
-      quoteTokenId: dbResult.quoteTokenId,
-      poolId: dbResult.poolId,
+      pool: dbResult.pool as any, // Pool with token0, token1 from include
+      isToken0Quote: dbResult.isToken0Quote,
       positionOpenedAt: dbResult.positionOpenedAt,
       positionClosedAt: dbResult.positionClosedAt,
       isActive: dbResult.isActive,
