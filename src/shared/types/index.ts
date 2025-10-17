@@ -30,10 +30,21 @@ export type {
   AnyPosition,
 } from './position.js';
 
+// Pool price types
+export type {
+  PoolPrice,
+  PoolPriceProtocol,
+  PoolPriceConfigMap,
+  UniswapV3PoolPrice,
+  AnyPoolPrice,
+} from './pool-price.js';
+
 // Uniswap V3 types (protocol-specific)
 export type {
   UniswapV3PoolConfig,
   UniswapV3PoolState,
   UniswapV3PositionConfig,
   UniswapV3PositionState,
+  UniswapV3PoolPriceConfig,
+  UniswapV3PoolPriceState,
 } from './uniswapv3/index.js';

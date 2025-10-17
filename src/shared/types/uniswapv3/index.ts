@@ -13,3 +13,9 @@ export type {
   UniswapV3PositionConfig,
   UniswapV3PositionState,
 } from './position.js';
+
+export type {
+  UniswapV3PoolPrice,
+  UniswapV3PoolPriceConfig,
+  UniswapV3PoolPriceState,
+} from './pool-price.js';
