@@ -31,20 +31,21 @@ import {
 } from './coingecko-client.js';
 
 // Known stable tokens for testing (real addresses and data)
+// NOTE: expectedName values are based on actual CoinGecko API responses
 const TEST_TOKENS = {
   USDC_ETHEREUM: {
     address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
     chainId: 1,
     expectedCoinId: 'usd-coin',
     expectedSymbol: 'USDC',
-    expectedName: 'USD Coin',
+    expectedName: 'USDC', // CoinGecko API returns "USDC" not "USD Coin"
   },
   USDC_ARBITRUM: {
     address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
     chainId: 42161,
     expectedCoinId: 'usd-coin',
     expectedSymbol: 'USDC',
-    expectedName: 'USD Coin',
+    expectedName: 'USDC', // CoinGecko API returns "USDC" not "USD Coin"
   },
   WETH_ETHEREUM: {
     address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
@@ -84,14 +85,8 @@ describe('CoinGeckoClient - Integration Tests', () => {
   let client: CoinGeckoClient;
 
   beforeAll(() => {
-    // Reset singleton to ensure clean state
-    CoinGeckoClient.resetInstance();
+    // Get singleton instance - cache is now shared across tests via PostgreSQL
     client = CoinGeckoClient.getInstance();
-  });
-
-  afterAll(() => {
-    // Clean up singleton
-    CoinGeckoClient.resetInstance();
   });
 
   // ==========================================================================
@@ -178,17 +173,14 @@ describe('CoinGeckoClient - Integration Tests', () => {
 
   describe('getAllTokens()', () => {
     it('should fetch and cache tokens from real API', { timeout: 30000 }, async () => {
-      // Clear cache first
-      client.clearCache();
-      expect(client.hasCachedData()).toBe(false);
-
       try {
-        // First call - should fetch from API
+        // First call - may hit cache or fetch from API (depending on previous test runs)
         const tokens = await client.getAllTokens();
         expect(tokens.length).toBeGreaterThan(1000); // CoinGecko has thousands of tokens
 
-        // Verify cache is now populated
-        expect(client.hasCachedData()).toBe(true);
+        // Verify cache is now populated (this may already be true from previous runs)
+        const hasCached = await client.hasCachedData();
+        expect(hasCached).toBe(true);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -200,20 +192,19 @@ describe('CoinGeckoClient - Integration Tests', () => {
 
     it('should use cached data on subsequent calls (performance)', { timeout: 30000 }, async () => {
       try {
-        // Clear cache and make first call
-        client.clearCache();
+        // Make two calls - second should be much faster due to cache
         const { duration: firstCallDuration } = await measureExecutionTime(() =>
           client.getAllTokens()
         );
 
-        // Second call should be much faster (cached)
         const { duration: secondCallDuration } = await measureExecutionTime(() =>
           client.getAllTokens()
         );
 
-        // Cached call should be significantly faster
-        expect(secondCallDuration).toBeLessThan(firstCallDuration / 10);
-        expect(secondCallDuration).toBeLessThan(10); // Should be < 10ms
+        // If both calls hit cache (typical), both will be fast
+        // If first was API call and second was cache, second should be much faster
+        // Either way, second call should be fast (< 50ms for database cache lookup)
+        expect(secondCallDuration).toBeLessThan(50);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -473,20 +464,22 @@ describe('CoinGeckoClient - Integration Tests', () => {
   describe('Cache Management', () => {
     it('should cache data and improve performance', { timeout: 30000 }, async () => {
       try {
-        client.clearCache();
+        // Clear cache for this specific test
+        await client.clearCache();
 
-        // First call - no cache
+        // First call - will fetch from API
         const { duration: uncachedDuration } = await measureExecutionTime(() =>
           client.getAllTokens()
         );
 
-        // Second call - cached
+        // Second call - should hit cache
         const { duration: cachedDuration } = await measureExecutionTime(() =>
           client.getAllTokens()
         );
 
-        // Cached should be significantly faster
-        expect(cachedDuration).toBeLessThan(uncachedDuration / 10);
+        // Cached should be significantly faster (database vs API call)
+        expect(cachedDuration).toBeLessThan(uncachedDuration / 5);
+        expect(cachedDuration).toBeLessThan(100); // Database cache should be < 100ms
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -498,14 +491,17 @@ describe('CoinGeckoClient - Integration Tests', () => {
 
     it('should report cached data status correctly', { timeout: 30000 }, async () => {
       try {
-        client.clearCache();
-        expect(client.hasCachedData()).toBe(false);
+        // Clear cache
+        await client.clearCache();
+        expect(await client.hasCachedData()).toBe(false);
 
+        // Populate cache
         await client.getAllTokens();
-        expect(client.hasCachedData()).toBe(true);
+        expect(await client.hasCachedData()).toBe(true);
 
-        client.clearCache();
-        expect(client.hasCachedData()).toBe(false);
+        // Clear again
+        await client.clearCache();
+        expect(await client.hasCachedData()).toBe(false);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -517,19 +513,17 @@ describe('CoinGeckoClient - Integration Tests', () => {
 
     it('should maintain cache across multiple method calls', { timeout: 30000 }, async () => {
       try {
-        client.clearCache();
-
-        // First call populates cache
+        // Ensure cache is populated
         await client.getAllTokens();
-        const hasCacheAfterFirst = client.hasCachedData();
+        const hasCacheAfterFirst = await client.hasCachedData();
+        expect(hasCacheAfterFirst).toBe(true);
 
-        // Subsequent calls should use cache
+        // Subsequent calls should use same cache
         await client.findCoinByAddress(1, TEST_TOKENS.USDC_ETHEREUM.address);
         await client.findCoinByAddress(1, TEST_TOKENS.WETH_ETHEREUM.address);
 
         // Cache should still be present
-        expect(hasCacheAfterFirst).toBe(true);
-        expect(client.hasCachedData()).toBe(true);
+        expect(await client.hasCachedData()).toBe(true);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -670,18 +664,17 @@ describe('CoinGeckoClient - Integration Tests', () => {
       expect(instance1).not.toBe(instance2);
     });
 
-    it('should maintain cache across getInstance() calls', { timeout: 30000 }, async () => {
+    it('should share cache across getInstance() calls via PostgreSQL', { timeout: 30000 }, async () => {
       try {
-        CoinGeckoClient.resetInstance();
         const instance1 = CoinGeckoClient.getInstance();
 
         // Populate cache
         await instance1.getAllTokens();
-        expect(instance1.hasCachedData()).toBe(true);
+        expect(await instance1.hasCachedData()).toBe(true);
 
-        // Get same instance again
+        // Get same instance again - cache is shared via PostgreSQL
         const instance2 = CoinGeckoClient.getInstance();
-        expect(instance2.hasCachedData()).toBe(true);
+        expect(await instance2.hasCachedData()).toBe(true);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');
@@ -691,16 +684,18 @@ describe('CoinGeckoClient - Integration Tests', () => {
       }
     });
 
-    it('should clear cache when resetting instance', { timeout: 30000 }, async () => {
+    it('should persist cache even after resetting instance', { timeout: 30000 }, async () => {
       try {
         const instance1 = CoinGeckoClient.getInstance();
         await instance1.getAllTokens();
-        expect(instance1.hasCachedData()).toBe(true);
+        expect(await instance1.hasCachedData()).toBe(true);
 
+        // Reset instance - but cache persists in PostgreSQL
         CoinGeckoClient.resetInstance();
 
         const instance2 = CoinGeckoClient.getInstance();
-        expect(instance2.hasCachedData()).toBe(false);
+        // Cache still exists in database
+        expect(await instance2.hasCachedData()).toBe(true);
       } catch (error) {
         if (isRateLimitError(error)) {
           console.warn('⚠️  Rate limited - skipping test');

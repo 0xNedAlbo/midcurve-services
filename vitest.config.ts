@@ -32,6 +32,16 @@ export default defineConfig({
           testTimeout: 30000,
           hookTimeout: 30000,
           fileParallelism: false,
+          // Limit concurrency for integration tests to ensure proper rate limiting
+          // RequestScheduler is shared across CoinGeckoClient instances, so we need
+          // to run tests sequentially to avoid overwhelming the CoinGecko API
+          pool: 'threads',
+          poolOptions: {
+            threads: {
+              maxThreads: 1,
+              minThreads: 1,
+            },
+          },
           globalSetup: './src/test/global-setup.ts',
           setupFiles: ['./src/test/setup-integration.ts'],
           // Override specific env vars (others loaded from .env.test)

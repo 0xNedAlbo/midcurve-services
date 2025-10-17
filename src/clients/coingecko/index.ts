@@ -9,4 +9,5 @@ export {
   type CoinGeckoToken,
   type CoinGeckoDetailedCoin,
   type EnrichmentData,
+  type CoinGeckoClientDependencies,
 } from './coingecko-client.js';

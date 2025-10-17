@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mockDeep } from 'vitest-mock-extended';
+import type { DeepMockProxy } from 'vitest-mock-extended';
 import {
   CoinGeckoClient,
   TokenNotFoundInCoinGeckoError,
@@ -10,15 +12,38 @@ import {
   type CoinGeckoToken,
   type CoinGeckoDetailedCoin,
 } from './coingecko-client.js';
+import { CacheService } from '../../services/cache/index.js';
+import { RequestScheduler } from '../../utils/request-scheduler/index.js';
 
 describe('CoinGeckoClient', () => {
   let client: CoinGeckoClient;
   let fetchMock: ReturnType<typeof vi.fn>;
+  let cacheServiceMock: DeepMockProxy<CacheService>;
+  let requestSchedulerMock: DeepMockProxy<RequestScheduler>;
 
   beforeEach(() => {
     // Reset singleton before each test
     CoinGeckoClient.resetInstance();
-    client = CoinGeckoClient.getInstance();
+
+    // Mock CacheService
+    cacheServiceMock = mockDeep<CacheService>();
+    // Default: cache miss (returns null)
+    cacheServiceMock.get.mockResolvedValue(null);
+    cacheServiceMock.set.mockResolvedValue(true);
+    cacheServiceMock.delete.mockResolvedValue(true);
+    cacheServiceMock.clear.mockResolvedValue(0);
+
+    // Mock RequestScheduler to execute tasks immediately
+    requestSchedulerMock = mockDeep<RequestScheduler>();
+    requestSchedulerMock.schedule.mockImplementation(async (task) => {
+      return await task();
+    });
+
+    // Create client with mocked cache and scheduler
+    client = new CoinGeckoClient({
+      cacheService: cacheServiceMock,
+      requestScheduler: requestSchedulerMock,
+    });
 
     // Mock global fetch
     fetchMock = vi.fn();
@@ -91,19 +116,23 @@ describe('CoinGeckoClient', () => {
     });
 
     it('should return cached tokens on subsequent calls', async () => {
+      const filteredTokens = mockTokens.slice(0, 2);
+
+      // First call - cache miss, fetches from API
       fetchMock.mockResolvedValueOnce({
         ok: true,
         json: async () => mockTokens,
       });
 
-      // First call - fetches from API
       const tokens1 = await client.getAllTokens();
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // Second call - uses cache
+      // Second call - cache hit, doesn't fetch
+      cacheServiceMock.get.mockResolvedValueOnce(filteredTokens);
+
       const tokens2 = await client.getAllTokens();
       expect(fetchMock).toHaveBeenCalledTimes(1); // Not called again
-      expect(tokens1).toEqual(tokens2);
+      expect(tokens2).toEqual(filteredTokens);
     });
 
     it('should filter tokens to only supported chains', async () => {
@@ -122,48 +151,61 @@ describe('CoinGeckoClient', () => {
     });
 
     it('should throw CoinGeckoApiError on API failure', async () => {
+      // Use fake timers to speed up retry delays
+      vi.useFakeTimers();
+
+      // Mock persistent 429 errors (will retry 6 times before giving up)
       fetchMock.mockResolvedValue({
         ok: false,
         status: 429,
         statusText: 'Too Many Requests',
       } as Response);
 
-      await expect(client.getAllTokens()).rejects.toThrow(CoinGeckoApiError);
+      const promise = client.getAllTokens();
+
+      // Fast-forward through all retry delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).rejects.toThrow(CoinGeckoApiError);
+      // Verify it retried multiple times (7 = initial + 6 retries)
+      expect(fetchMock).toHaveBeenCalledTimes(7);
+
+      vi.useRealTimers();
     });
 
-    it('should return stale cache if API fails and cache exists', async () => {
-      // First call succeeds
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockTokens,
-      });
-      await client.getAllTokens();
+    it('should use cache when available even if API would fail', async () => {
+      const filteredTokens = mockTokens.slice(0, 2);
 
-      // Clear cache expiry to simulate expired cache
-      client.clearCache();
-      // Set cache back manually to simulate stale cache
-      (client as any).tokensCache = mockTokens.slice(0, 2);
-      (client as any).cacheExpiry = 0; // Expired
-
-      // Second call fails but should return stale cache
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-      });
+      // Simulate cache hit (no API call needed)
+      cacheServiceMock.get.mockResolvedValueOnce(filteredTokens);
 
       const tokens = await client.getAllTokens();
       expect(tokens).toHaveLength(2);
+      expect(tokens).toEqual(filteredTokens);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('should throw error if API fails and no cache exists', async () => {
-      fetchMock.mockResolvedValueOnce({
+      // Use fake timers to speed up retry delays
+      vi.useFakeTimers();
+
+      // Mock persistent 500 errors (will retry 6 times before giving up)
+      fetchMock.mockResolvedValue({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
-      });
+      } as Response);
 
-      await expect(client.getAllTokens()).rejects.toThrow(CoinGeckoApiError);
+      const promise = client.getAllTokens();
+
+      // Fast-forward through all retry delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).rejects.toThrow(CoinGeckoApiError);
+      // Verify it retried multiple times (7 = initial + 6 retries)
+      expect(fetchMock).toHaveBeenCalledTimes(7);
+
+      vi.useRealTimers();
     });
   });
 
@@ -404,14 +446,21 @@ describe('CoinGeckoClient', () => {
       });
 
       await client.getAllTokens();
-      expect(client.hasCachedData()).toBe(true);
 
-      client.clearCache();
-      expect(client.hasCachedData()).toBe(false);
+      // After getAllTokens(), cache should have data
+      cacheServiceMock.get.mockResolvedValueOnce([]);
+      expect(await client.hasCachedData()).toBe(true);
+
+      // After clearCache(), cache should be empty
+      await client.clearCache();
+      cacheServiceMock.get.mockResolvedValueOnce(null);
+      expect(await client.hasCachedData()).toBe(false);
     });
 
     it('should report cached data status', async () => {
-      expect(client.hasCachedData()).toBe(false);
+      // Initially no cache
+      cacheServiceMock.get.mockResolvedValueOnce(null);
+      expect(await client.hasCachedData()).toBe(false);
 
       fetchMock.mockResolvedValueOnce({
         ok: true,
@@ -419,7 +468,10 @@ describe('CoinGeckoClient', () => {
       });
 
       await client.getAllTokens();
-      expect(client.hasCachedData()).toBe(true);
+
+      // After getAllTokens(), cache should have data
+      cacheServiceMock.get.mockResolvedValueOnce([]);
+      expect(await client.hasCachedData()).toBe(true);
     });
   });
 

@@ -13,6 +13,17 @@ datasource db {
 // Models for concentrated liquidity positions
 // Supporting: Uniswap V3 (Ethereum), Orca (Solana), Raydium (Solana), PancakeSwap (BSC)
 
+model Cache {
+  key       String   @id
+  value     Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Indexes for efficient queries
+  @@index([expiresAt])
+}
+
 model User {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())

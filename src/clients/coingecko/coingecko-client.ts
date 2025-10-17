@@ -13,6 +13,8 @@
 
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
+import { CacheService } from '../../services/cache/index.js';
+import { RequestScheduler } from '../../utils/request-scheduler/index.js';
 
 /**
  * CoinGecko token representation from the coins list API
@@ -92,23 +94,35 @@ export class CoinGeckoApiError extends Error {
   }
 }
 
+export interface CoinGeckoClientDependencies {
+  /**
+   * Cache service for distributed caching
+   * If not provided, the singleton CacheService instance will be used
+   */
+  cacheService?: CacheService;
+
+  /**
+   * Request scheduler for rate limiting
+   * If not provided, a new RequestScheduler with 2200ms spacing will be created
+   * @default new RequestScheduler({ minSpacingMs: 2200, name: 'CoinGeckoScheduler' })
+   */
+  requestScheduler?: RequestScheduler;
+}
+
 /**
  * CoinGecko API Client
  *
- * Manages API requests to CoinGecko with caching and error handling.
+ * Manages API requests to CoinGecko with distributed caching and error handling.
+ * Uses PostgreSQL-based caching to share cache across multiple processes, workers, and serverless functions.
  * Uses singleton pattern for convenient default access.
  */
 export class CoinGeckoClient {
   private static instance: CoinGeckoClient | null = null;
 
   private readonly baseUrl = 'https://api.coingecko.com/api/v3';
-  private tokensCache: CoinGeckoToken[] | null = null;
-  private cacheExpiry: number = 0;
-  private readonly cacheTimeout = 60 * 60 * 1000; // 1 hour
-
-  // Cache for individual coin details (by coinId)
-  private coinDetailsCache: Map<string, { data: CoinGeckoDetailedCoin; expiry: number }> = new Map();
-  private readonly coinDetailsCacheTimeout = 60 * 60 * 1000; // 1 hour
+  private readonly cacheService: CacheService;
+  private readonly requestScheduler: RequestScheduler;
+  private readonly cacheTimeout = 3600; // 1 hour in seconds
 
   private readonly logger: ServiceLogger;
 
@@ -125,8 +139,15 @@ export class CoinGeckoClient {
     10: 'optimistic-ethereum', // Optimism
   };
 
-  constructor() {
+  constructor(dependencies: CoinGeckoClientDependencies = {}) {
     this.logger = createServiceLogger('CoinGeckoClient');
+    this.cacheService = dependencies.cacheService ?? CacheService.getInstance();
+    this.requestScheduler =
+      dependencies.requestScheduler ??
+      new RequestScheduler({
+        minSpacingMs: 2200, // ~27 requests per minute for CoinGecko
+        name: 'CoinGeckoScheduler',
+      });
   }
 
   /**
@@ -147,11 +168,108 @@ export class CoinGeckoClient {
   }
 
   /**
-   * Get all tokens from CoinGecko with caching
+   * Scheduled fetch wrapper that combines rate limiting and retry logic
+   *
+   * All CoinGecko API calls go through this method to ensure:
+   * - Minimum 2200ms spacing between requests (~27 rpm)
+   * - Automatic retry with exponential backoff for transient errors (429, 5xx)
+   * - Respect for Retry-After headers
+   *
+   * @param url - Full URL to fetch
+   * @returns Promise<Response> from fetch
+   * @throws Error if all retry attempts fail
+   */
+  private async scheduledFetch(url: string): Promise<Response> {
+    return this.requestScheduler.schedule(async () => {
+      // Manual retry logic with exponential backoff
+      const maxRetries = 6;
+      const baseDelayMs = 800;
+      const maxDelayMs = 8000;
+
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const response = await fetch(url);
+
+          // Success - return response
+          if (response.ok) {
+            return response;
+          }
+
+          // Check if error is retryable
+          const isRetryable =
+            response.status === 429 || (response.status >= 500 && response.status < 600);
+
+          if (!isRetryable || attempt >= maxRetries) {
+            // Non-retryable or out of retries - return response for caller to handle
+            return response;
+          }
+
+          // Calculate delay with Retry-After header support
+          const retryAfterHeader = response.headers.get('Retry-After');
+          let delay: number;
+
+          if (retryAfterHeader) {
+            const retryAfterSeconds = Number(retryAfterHeader);
+            if (!isNaN(retryAfterSeconds)) {
+              delay = Math.min(maxDelayMs, Math.max(baseDelayMs, retryAfterSeconds * 1000));
+            } else {
+              const retryAfterDate = new Date(retryAfterHeader);
+              delay = Math.min(
+                maxDelayMs,
+                Math.max(baseDelayMs, retryAfterDate.getTime() - Date.now())
+              );
+            }
+          } else {
+            // Exponential backoff
+            delay = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+          }
+
+          // Add jitter
+          delay += Math.floor(Math.random() * 200);
+
+          this.logger.warn(
+            {
+              attempt: attempt + 1,
+              maxRetries,
+              status: response.status,
+              delay,
+              hasRetryAfter: !!retryAfterHeader,
+            },
+            'Retryable error, backing off'
+          );
+
+          // Wait before retrying
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } catch (error) {
+          // Network error
+          if (attempt >= maxRetries) {
+            throw error;
+          }
+
+          const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+          const jitter = Math.floor(Math.random() * 200);
+
+          this.logger.warn(
+            { attempt: attempt + 1, delay: delay + jitter, error },
+            'Network error, retrying with backoff'
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, delay + jitter));
+        }
+      }
+
+      // Should never reach here
+      throw new Error('Unexpected end of retry loop');
+    });
+  }
+
+  /**
+   * Get all tokens from CoinGecko with distributed caching
    *
    * Fetches the complete token list from CoinGecko and filters to only
    * include tokens available on supported chains. Results are cached
-   * for 1 hour to minimize API calls.
+   * in PostgreSQL for 1 hour to minimize API calls and share cache across
+   * all application instances, workers, and serverless functions.
    *
    * @returns Array of CoinGecko tokens on supported chains
    * @throws CoinGeckoApiError if API request fails
@@ -159,18 +277,20 @@ export class CoinGeckoClient {
   async getAllTokens(): Promise<CoinGeckoToken[]> {
     log.methodEntry(this.logger, 'getAllTokens');
 
-    const now = Date.now();
+    const cacheKey = 'coingecko:tokens:all';
 
-    // Return cached data if valid
-    if (this.tokensCache && now < this.cacheExpiry) {
-      log.cacheHit(this.logger, 'getAllTokens', 'tokens');
+    // Check distributed cache first
+    const cached = await this.cacheService.get<CoinGeckoToken[]>(cacheKey);
+    if (cached) {
+      log.cacheHit(this.logger, 'getAllTokens', cacheKey);
       log.methodExit(this.logger, 'getAllTokens', {
-        count: this.tokensCache.length,
+        count: cached.length,
+        fromCache: true,
       });
-      return this.tokensCache;
+      return cached;
     }
 
-    log.cacheMiss(this.logger, 'getAllTokens', 'tokens');
+    log.cacheMiss(this.logger, 'getAllTokens', cacheKey);
 
     try {
       log.externalApiCall(
@@ -180,7 +300,7 @@ export class CoinGeckoClient {
         { include_platform: true }
       );
 
-      const response = await fetch(
+      const response = await this.scheduledFetch(
         `${this.baseUrl}/coins/list?include_platform=true`
       );
 
@@ -219,24 +339,15 @@ export class CoinGeckoClient {
         'Filtered tokens for supported chains'
       );
 
-      // Update cache
-      this.tokensCache = filteredTokens;
-      this.cacheExpiry = now + this.cacheTimeout;
+      // Store in distributed cache
+      await this.cacheService.set(cacheKey, filteredTokens, this.cacheTimeout);
 
       log.methodExit(this.logger, 'getAllTokens', {
         count: filteredTokens.length,
+        fromCache: false,
       });
       return filteredTokens;
     } catch (error) {
-      // If we have stale cached data and API fails, return cached data
-      if (this.tokensCache) {
-        this.logger.warn(
-          { cachedCount: this.tokensCache.length },
-          'Returning stale cached data due to API error'
-        );
-        return this.tokensCache;
-      }
-
       // Re-throw CoinGeckoApiError
       if (error instanceof CoinGeckoApiError) {
         throw error;
@@ -304,7 +415,7 @@ export class CoinGeckoClient {
   }
 
   /**
-   * Get detailed coin information including market cap and logo
+   * Get detailed coin information including market cap and logo with distributed caching
    *
    * @param coinId - CoinGecko coin ID
    * @returns Detailed coin information
@@ -313,27 +424,27 @@ export class CoinGeckoClient {
   async getCoinDetails(coinId: string): Promise<CoinGeckoDetailedCoin> {
     log.methodEntry(this.logger, 'getCoinDetails', { coinId });
 
-    const now = Date.now();
+    const cacheKey = `coingecko:coin:${coinId}`;
 
-    // Check cache first
-    const cached = this.coinDetailsCache.get(coinId);
-    if (cached && now < cached.expiry) {
-      log.cacheHit(this.logger, 'getCoinDetails', `coinDetails:${coinId}`);
+    // Check distributed cache first
+    const cached = await this.cacheService.get<CoinGeckoDetailedCoin>(cacheKey);
+    if (cached) {
+      log.cacheHit(this.logger, 'getCoinDetails', cacheKey);
       log.methodExit(this.logger, 'getCoinDetails', {
-        coinId: cached.data.id,
+        coinId: cached.id,
         fromCache: true,
       });
-      return cached.data;
+      return cached;
     }
 
-    log.cacheMiss(this.logger, 'getCoinDetails', `coinDetails:${coinId}`);
+    log.cacheMiss(this.logger, 'getCoinDetails', cacheKey);
 
     try {
       log.externalApiCall(this.logger, 'CoinGecko', `/coins/${coinId}`, {
         market_data: true,
       });
 
-      const response = await fetch(
+      const response = await this.scheduledFetch(
         `${this.baseUrl}/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`
       );
 
@@ -355,11 +466,8 @@ export class CoinGeckoClient {
         'Retrieved coin details'
       );
 
-      // Cache the result
-      this.coinDetailsCache.set(coinId, {
-        data: coin,
-        expiry: now + this.coinDetailsCacheTimeout,
-      });
+      // Store in distributed cache
+      await this.cacheService.set(cacheKey, coin, this.cacheTimeout);
 
       log.methodExit(this.logger, 'getCoinDetails', {
         coinId: coin.id,
@@ -487,19 +595,22 @@ export class CoinGeckoClient {
   }
 
   /**
-   * Clear all caches (useful for testing or manual refresh)
+   * Clear all CoinGecko caches (useful for testing or manual refresh)
+   *
+   * @returns Number of cache entries cleared, or -1 on error
    */
-  clearCache(): void {
-    this.tokensCache = null;
-    this.cacheExpiry = 0;
-    this.coinDetailsCache.clear();
+  async clearCache(): Promise<number> {
+    return await this.cacheService.clear('coingecko:');
   }
 
   /**
-   * Check if service has valid cached data
+   * Check if service has valid cached data for token list
+   *
+   * @returns true if tokens are cached, false otherwise
    */
-  hasCachedData(): boolean {
-    return this.tokensCache !== null && Date.now() < this.cacheExpiry;
+  async hasCachedData(): Promise<boolean> {
+    const cached = await this.cacheService.get<CoinGeckoToken[]>('coingecko:tokens:all');
+    return cached !== null;
   }
 
   /**
