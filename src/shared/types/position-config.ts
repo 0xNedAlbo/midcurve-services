@@ -8,51 +8,11 @@
  * Each protocol is mapped to its specific config and state types.
  */
 
+import type { UniswapV3PositionConfig } from './uniswapv3/position-config.js';
 import type { UniswapV3PositionState } from './uniswapv3/position-state.js';
 
-/**
- * Uniswap V3 Position Configuration
- *
- * Immutable configuration for Uniswap V3 positions.
- */
-export interface UniswapV3PositionConfig {
-  /**
-   * Chain ID where the position exists
-   * @example 1 (Ethereum), 42161 (Arbitrum), 8453 (Base)
-   */
-  chainId: number;
-
-  /**
-   * NFT token ID
-   * Unique identifier for the Uniswap V3 position NFT
-   */
-  nftId: number;
-
-  /**
-   * Pool address on the blockchain
-   * EIP-55 checksummed address
-   */
-  poolAddress: string;
-
-  /**
-   * Whether token0 is the quote token
-   * true: token0 is quote, token1 is base
-   * false: token1 is quote, token0 is base
-   */
-  token0IsQuote: boolean;
-
-  /**
-   * Upper tick bound
-   * The upper tick of the position's price range
-   */
-  tickUpper: number;
-
-  /**
-   * Lower tick bound
-   * The lower tick of the position's price range
-   */
-  tickLower: number;
-}
+// Re-export for convenience
+export type { UniswapV3PositionConfig } from './uniswapv3/position-config.js';
 
 /**
  * Position Config/State Mapping

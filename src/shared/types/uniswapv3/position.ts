@@ -7,6 +7,6 @@
  * This file only re-exports the config and state types for convenience.
  */
 
-export type { UniswapV3PositionConfig } from '../position-config.js';
+export type { UniswapV3PositionConfig } from './position-config.js';
 export type { UniswapV3PositionState } from './position-state.js';
 export type { UniswapV3Position } from '../position.js';

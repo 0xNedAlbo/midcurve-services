@@ -122,7 +122,7 @@ export interface Pool<P extends keyof PoolConfigMap> {
    * Type is determined by the protocol parameter P.
    * For Pool<'uniswapv3'>, this will be UniswapV3PoolConfig.
    *
-   * @see pool-config.ts for specific config types
+   * @see uniswapv3/pool-config.ts for specific config types
    */
   config: PoolConfigMap[P]['config'];
 
@@ -137,10 +137,10 @@ export interface Pool<P extends keyof PoolConfigMap> {
    *
    * Note: For TypeScript, state uses bigint. In database, bigint values are stored as strings.
    *
-   * @see pool-config.ts for specific state types
+   * @see uniswapv3/pool-state.ts for specific state types
    */
   state: PoolConfigMap[P]['state'];
 }
 
 // Re-export type aliases
-export type { UniswapV3Pool, AnyPool } from './pool-config.js';
+export type { UniswapV3Pool, AnyPool } from './uniswapv3/pool.js';

@@ -17,14 +17,8 @@ export type {
 export type { Erc20TokenConfig } from './token-config.js';
 
 // Pool types
-export type { Pool, Protocol, PoolType } from './pool.js';
-export type {
-  PoolConfigMap,
-  UniswapV3PoolConfig,
-  UniswapV3PoolState,
-  UniswapV3Pool,
-  AnyPool,
-} from './pool-config.js';
+export type { Pool, Protocol, PoolType, UniswapV3Pool, AnyPool } from './pool.js';
+export type { PoolConfigMap } from './pool-config.js';
 
 // Position types
 export type {
@@ -35,9 +29,11 @@ export type {
   UniswapV3Position,
   AnyPosition,
 } from './position.js';
-export type { UniswapV3PositionConfig } from './position-config.js';
 
-// Uniswap V3 types
+// Uniswap V3 types (protocol-specific)
 export type {
+  UniswapV3PoolConfig,
+  UniswapV3PoolState,
+  UniswapV3PositionConfig,
   UniswapV3PositionState,
 } from './uniswapv3/index.js';
