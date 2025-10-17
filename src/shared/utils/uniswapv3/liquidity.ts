@@ -265,8 +265,8 @@ export function getTokenAmountsFromLiquidity_withTick(
     return getTokenAmountsFromLiquidity(
         liquidity,
         BigInt(sqrtPriceCurrentX96.toString()),
-        tickUpper,
         tickLower,
+        tickUpper,
         roundUp
     );
 }
