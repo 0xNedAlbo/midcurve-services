@@ -57,6 +57,22 @@ export interface CoinGeckoDetailedCoin {
 }
 
 /**
+ * Market data from the /coins/markets endpoint (batch operation)
+ */
+export interface CoinGeckoMarketData {
+  /** CoinGecko coin ID */
+  id: string;
+  /** Token symbol */
+  symbol: string;
+  /** Token name */
+  name: string;
+  /** Logo URL */
+  image: string;
+  /** Market cap in USD */
+  market_cap: number;
+}
+
+/**
  * Enrichment data extracted from CoinGecko
  */
 export interface EnrichmentData {
@@ -489,6 +505,106 @@ export class CoinGeckoClient {
       log.methodError(this.logger, 'getCoinDetails', wrappedError, {
         coinId,
       });
+      throw wrappedError;
+    }
+  }
+
+  /**
+   * Get market data for multiple coins in a single batch request
+   *
+   * This method uses the /coins/markets endpoint which is much more efficient
+   * than making individual /coins/{id} requests for each token.
+   *
+   * Use this for cache warming or when you need data for multiple tokens.
+   *
+   * @param coinIds - Array of CoinGecko coin IDs (e.g., ['bitcoin', 'ethereum', 'usd-coin'])
+   * @returns Array of market data for the requested coins
+   * @throws CoinGeckoApiError if API request fails
+   *
+   * @example
+   * ```typescript
+   * const client = CoinGeckoClient.getInstance();
+   * const marketData = await client.getCoinsMarketData(['usd-coin', 'weth', 'dai']);
+   * // Returns array with logo URLs and market caps for all three tokens
+   * ```
+   */
+  async getCoinsMarketData(coinIds: string[]): Promise<CoinGeckoMarketData[]> {
+    log.methodEntry(this.logger, 'getCoinsMarketData', { coinIds, count: coinIds.length });
+
+    if (coinIds.length === 0) {
+      log.methodExit(this.logger, 'getCoinsMarketData', { count: 0 });
+      return [];
+    }
+
+    // Build cache key from sorted coin IDs for consistency
+    const sortedIds = [...coinIds].sort();
+    const cacheKey = `coingecko:markets:${sortedIds.join(',')}`;
+
+    // Check distributed cache first
+    const cached = await this.cacheService.get<CoinGeckoMarketData[]>(cacheKey);
+    if (cached) {
+      log.cacheHit(this.logger, 'getCoinsMarketData', cacheKey);
+      log.methodExit(this.logger, 'getCoinsMarketData', {
+        count: cached.length,
+        fromCache: true,
+      });
+      return cached;
+    }
+
+    log.cacheMiss(this.logger, 'getCoinsMarketData', cacheKey);
+
+    try {
+      // Join coin IDs with commas (CoinGecko accepts up to ~250 IDs)
+      const idsParam = coinIds.join(',');
+
+      log.externalApiCall(this.logger, 'CoinGecko', '/coins/markets', {
+        ids: idsParam,
+        vs_currency: 'usd',
+      });
+
+      const response = await this.scheduledFetch(
+        `${this.baseUrl}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(idsParam)}&per_page=250`
+      );
+
+      if (!response.ok) {
+        const error = new CoinGeckoApiError(
+          `CoinGecko API error: ${response.status} ${response.statusText}`,
+          response.status
+        );
+        log.methodError(this.logger, 'getCoinsMarketData', error, {
+          coinIds,
+          statusCode: response.status,
+        });
+        throw error;
+      }
+
+      const marketData = (await response.json()) as CoinGeckoMarketData[];
+      this.logger.debug(
+        { requestedCount: coinIds.length, receivedCount: marketData.length },
+        'Retrieved market data from CoinGecko API'
+      );
+
+      // Store in distributed cache
+      await this.cacheService.set(cacheKey, marketData, this.cacheTimeout);
+
+      log.methodExit(this.logger, 'getCoinsMarketData', {
+        count: marketData.length,
+        fromCache: false,
+      });
+      return marketData;
+    } catch (error) {
+      // Re-throw CoinGeckoApiError
+      if (error instanceof CoinGeckoApiError) {
+        throw error;
+      }
+
+      // Wrap other errors
+      const wrappedError = new CoinGeckoApiError(
+        `Failed to fetch market data for coins: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+      log.methodError(this.logger, 'getCoinsMarketData', wrappedError, { coinIds });
       throw wrappedError;
     }
   }
