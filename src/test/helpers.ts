@@ -45,6 +45,7 @@ export async function clearDatabase(): Promise<void> {
   try {
     // Delete in order respecting foreign key constraints
     await prisma.position.deleteMany({});
+    await prisma.poolPrice.deleteMany({}); // Delete pool prices before pools
     await prisma.pool.deleteMany({});
     await prisma.token.deleteMany({});
     await prisma.user.deleteMany({});

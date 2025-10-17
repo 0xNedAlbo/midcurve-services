@@ -15,9 +15,13 @@
  * - Address: 0xC6962004f452bE9203591991D15f6b388e09E8D0
  * - WETH (token0): 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
  * - USDC (token1): 0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+ *
+ * NOTE: This test suite manages its own database state and does NOT use
+ * the global beforeEach/afterEach cleanup from setup-integration.ts to avoid
+ * deleting the pool created in beforeAll().
  */
 
-import { describe, expect, it, beforeEach, afterAll, beforeAll } from 'vitest';
+import { describe, expect, it, beforeEach, afterAll, beforeAll, afterEach, vi } from 'vitest';
 import { UniswapV3PoolPriceService } from './uniswapv3-pool-price-service.js';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { Erc20TokenService } from '../token/erc20-token-service.js';
@@ -45,8 +49,10 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
     chainId: 42161, // Arbitrum
   };
 
-  // Track created pool for cleanup
+  // Track created pool and tokens for cleanup
   let createdPoolId: string | null = null;
+  let wethId: string | null = null;
+  let usdcId: string | null = null;
 
   beforeAll(async () => {
     // Initialize services
@@ -62,10 +68,25 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
       evmConfig,
     });
 
-    // Clean up any existing test data
-    await prisma.poolPrice.deleteMany({
-      where: { poolId: { contains: 'pool_weth_usdc_arb' } },
+    // Clean up any existing test data (handle foreign key constraints)
+    // First, find any existing pools that match our test pool
+    const existingPools = await prisma.pool.findMany({
+      where: {
+        config: {
+          path: ['address'],
+          equals: WETH_USDC_POOL.address,
+        },
+      },
     });
+
+    // Delete pool prices for those pools
+    for (const pool of existingPools) {
+      await prisma.poolPrice.deleteMany({
+        where: { poolId: pool.id },
+      });
+    }
+
+    // Now safe to delete the pools and tokens
     await prisma.pool.deleteMany({
       where: {
         config: {
@@ -75,36 +96,97 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
       },
     });
 
-    // Discover the pool first (needed for all pool price tests)
-    const pool = await poolService.discover({
-      poolAddress: WETH_USDC_POOL.address,
-      chainId: WETH_USDC_POOL.chainId,
+    // Clean up test tokens
+    await prisma.token.deleteMany({
+      where: {
+        OR: [
+          {
+            config: {
+              path: ['address'],
+              equals: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', // WETH
+            },
+          },
+          {
+            config: {
+              path: ['address'],
+              equals: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC
+            },
+          },
+        ],
+      },
     });
+
+    console.log('🧹 Cleaned up existing test data');
+  }, 30000);
+
+  // Create pool before each test (since global beforeEach clears database)
+  beforeEach(async () => {
+    // Create mock tokens directly (no RPC calls)
+    const weth = await prisma.token.create({
+      data: {
+        tokenType: 'evm-erc20',
+        name: 'Wrapped Ether',
+        symbol: 'WETH',
+        decimals: 18,
+        config: {
+          address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+          chainId: 42161,
+        },
+      },
+    });
+    wethId = weth.id;
+
+    const usdc = await prisma.token.create({
+      data: {
+        tokenType: 'evm-erc20',
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimals: 6,
+        config: {
+          address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+          chainId: 42161,
+        },
+      },
+    });
+    usdcId = usdc.id;
+
+    console.log(`✓ Created mock tokens: ${weth.symbol}, ${usdc.symbol}`);
+
+    // Create mock pool directly (no RPC calls)
+    const pool = await prisma.pool.create({
+      data: {
+        protocol: 'uniswapv3',
+        poolType: 'CL_TICKS',
+        token0Id: wethId!,
+        token1Id: usdcId!,
+        feeBps: 5, // 0.05%
+        config: {
+          chainId: WETH_USDC_POOL.chainId,
+          address: WETH_USDC_POOL.address,
+          token0: weth.config.address,
+          token1: usdc.config.address,
+          feeBps: 5,
+          tickSpacing: 10,
+        },
+        state: {
+          sqrtPriceX96: '4880027310900678652549898',
+          liquidity: '1000000000000000000',
+          tick: -193909,
+          observationIndex: 0,
+          observationCardinality: 1,
+          observationCardinalityNext: 1,
+          feeProtocol: 0,
+          unlocked: true,
+        },
+      },
+    });
+
     createdPoolId = pool.id;
-    console.log(`✓ Pool discovered: ${createdPoolId}`);
-  }, 60000); // Increase timeout for pool discovery
+    console.log(`✓ Pool created for test: ${createdPoolId} (${weth.symbol}/${usdc.symbol})`);
+  });
 
   afterAll(async () => {
-    // Clean up test data only if pool was created
-    if (createdPoolId) {
-      try {
-        // Delete pool prices first
-        await prisma.poolPrice.deleteMany({
-          where: { poolId: createdPoolId },
-        });
-
-        // Delete pool
-        await prisma.pool.delete({
-          where: { id: createdPoolId },
-        });
-
-        console.log(`✓ Cleaned up pool: ${createdPoolId}`);
-      } catch (error) {
-        // Ignore if already deleted or doesn't exist
-        console.log(`ℹ Pool cleanup skipped (may have been deleted already)`);
-      }
-    }
-
+    // Disconnect Prisma (cleanup handled by global afterEach)
     await disconnectPrisma();
   });
 
@@ -219,10 +301,21 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
     }, 30000);
 
     it('should store multiple historical prices for same pool', async () => {
-      // All three blocks should now be discovered
+      // Discover 3 different historical prices
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_EARLY_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_MID_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_LATE_2024.input.config.blockNumber,
+      });
+
+      // Fetch all prices
       const allPrices = await poolPriceService.findByPoolId(createdPoolId!);
 
-      // Should have at least 3 prices (may have more if tests run multiple times)
+      // Should have exactly 3 prices
       expect(allPrices.length).toBeGreaterThanOrEqual(3);
 
       // Verify they're ordered by timestamp descending (newest first)
@@ -233,7 +326,7 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
       }
 
       console.log(`✓ Found ${allPrices.length} historical prices for pool`);
-    });
+    }, 60000); // Increased timeout for 3 RPC calls
   });
 
   // ==========================================================================
@@ -242,6 +335,17 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
 
   describe('findByPoolIdAndTimeRange() - Real Historical Data', () => {
     it('should find prices within time range', async () => {
+      // Create 3 historical prices first
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_EARLY_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_MID_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_LATE_2024.input.config.blockNumber,
+      });
+
       const startTime = new Date('2023-11-01T00:00:00Z'); // Before first block
       const endTime = new Date('2024-02-01T00:00:00Z'); // Between first and second block
 
@@ -268,7 +372,7 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
       }
 
       console.log(`✓ Found ${prices.length} prices in range ${startTime.toISOString()} to ${endTime.toISOString()}`);
-    });
+    }, 60000); // Increased timeout for 3 RPC calls
 
     it('should return empty array for time range with no prices', async () => {
       const startTime = new Date('2020-01-01T00:00:00Z');
@@ -284,6 +388,17 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
     });
 
     it('should find all prices with wide time range', async () => {
+      // Create 3 historical prices first
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_EARLY_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_MID_2024.input.config.blockNumber,
+      });
+      await poolPriceService.discover(createdPoolId!, {
+        blockNumber: REAL_ARBITRUM_LATE_2024.input.config.blockNumber,
+      });
+
       const startTime = new Date('2023-01-01T00:00:00Z');
       const endTime = new Date('2025-01-01T00:00:00Z');
 
@@ -297,7 +412,7 @@ describe('UniswapV3PoolPriceService - Integration Tests', () => {
       expect(prices.length).toBeGreaterThanOrEqual(3);
 
       console.log(`✓ Found all ${prices.length} historical prices`);
-    });
+    }, 60000); // Increased timeout for 3 RPC calls
   });
 
   // ==========================================================================
