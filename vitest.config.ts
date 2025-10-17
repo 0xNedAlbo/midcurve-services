@@ -32,14 +32,18 @@ export default defineConfig({
           testTimeout: 30000,
           hookTimeout: 30000,
           fileParallelism: false,
+          // Run tests sequentially to ensure proper database isolation
+          // and avoid race conditions with database cleanup
+          sequence: {
+            concurrent: false,
+          },
           // Limit concurrency for integration tests to ensure proper rate limiting
           // RequestScheduler is shared across CoinGeckoClient instances, so we need
           // to run tests sequentially to avoid overwhelming the CoinGecko API
-          pool: 'threads',
+          pool: 'forks',
           poolOptions: {
-            threads: {
-              maxThreads: 1,
-              minThreads: 1,
+            forks: {
+              singleFork: true,
             },
           },
           globalSetup: './src/test/global-setup.ts',

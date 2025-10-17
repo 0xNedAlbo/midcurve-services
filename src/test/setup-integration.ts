@@ -1,16 +1,22 @@
 /**
  * Setup file for integration tests
- * Runs before each test file
+ * Runs for each test file
  *
  * Responsibilities:
- * - Clean database before each test file
+ * - Clean database before AND after each test
  * - Provide clean state for each test suite
+ * - Prevent state leaking between tests and test files
  */
 
-import { afterEach } from 'vitest';
+import { beforeEach, afterEach } from 'vitest';
 import { clearDatabase } from './helpers.js';
 
-// Clean database after each test to ensure isolation
+// Clean database before each test to ensure clean starting state
+beforeEach(async () => {
+  await clearDatabase();
+});
+
+// Clean database after each test to prevent state leaking to next test file
 afterEach(async () => {
   await clearDatabase();
 });
