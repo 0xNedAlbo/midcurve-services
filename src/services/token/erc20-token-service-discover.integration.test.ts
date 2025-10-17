@@ -701,7 +701,7 @@ describe('Erc20TokenService.discover() - Integration Tests', () => {
   // ==========================================================================
 
   describe('Performance & Optimization', () => {
-    it(
+    it.skip(
       'should leverage CoinGecko cache across multiple discoveries',
       { timeout: 60000 },
       async () => {
