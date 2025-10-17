@@ -83,13 +83,14 @@ export type AnyPositionDiscoverInput =
  * - collectedFees, unClaimedFees, lastFeesCollectedAt
  * - priceRangeLower, priceRangeUpper
  * - positionOpenedAt, positionClosedAt, isActive
- * - state (computed from on-chain data)
  * - pool (replaced with poolId for database FK)
  *
  * Also omits database-generated fields: id, createdAt, updatedAt
  *
- * Note: This is a manual creation helper. For creating positions from on-chain data,
- * use discover() which handles pool discovery, token role determination, and state fetching.
+ * State is required - typically provided by discover() method from on-chain data.
+ *
+ * Note: This is primarily used by discover() which handles pool discovery,
+ * token role determination, and state fetching from on-chain data.
  *
  * @template P - Protocol key from PositionConfigMap ('uniswapv3', etc.)
  */
@@ -100,6 +101,7 @@ export type CreatePositionInput<P extends keyof PositionConfigMap> = Pick<
   | 'userId'
   | 'isToken0Quote'
   | 'config'
+  | 'state'
 > & {
   /** Pool ID for database foreign key (service maps this to full Pool object) */
   poolId: string;

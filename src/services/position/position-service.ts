@@ -231,17 +231,17 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
       // Serialize config for database storage
       const configDB = this.serializeConfig(input.config);
 
-      // For manual creation, we need state to be provided
-      // For discover(), state will be fetched from on-chain
-      if (!('state' in input)) {
+      // State is required for position creation
+      // discover() method provides state from on-chain data
+      if (!input.state) {
         const error = new Error(
-          'state is required for manual position creation. Use discover() to create from on-chain data.'
+          'state is required for position creation. Use discover() to create from on-chain data.'
         );
         log.methodError(this.logger, 'create', error, { input });
         throw error;
       }
 
-      const stateDB = this.serializeState((input as any).state);
+      const stateDB = this.serializeState(input.state);
 
       // Default calculated values (will be computed properly in discover())
       const now = new Date();

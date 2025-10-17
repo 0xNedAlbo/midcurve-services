@@ -446,7 +446,27 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         tickLower: position.tickLower,
       };
 
-      // 9. Create position via create() method
+      // 9. Create position state from on-chain data
+      const state: UniswapV3PositionState = {
+        ownerAddress: normalizeAddress(ownerAddress),
+        liquidity: position.liquidity,
+        feeGrowthInside0LastX128: position.feeGrowthInside0LastX128,
+        feeGrowthInside1LastX128: position.feeGrowthInside1LastX128,
+        tokensOwed0: position.tokensOwed0,
+        tokensOwed1: position.tokensOwed1,
+      };
+
+      this.logger.debug(
+        {
+          ownerAddress: state.ownerAddress,
+          liquidity: state.liquidity.toString(),
+          tokensOwed0: state.tokensOwed0.toString(),
+          tokensOwed1: state.tokensOwed1.toString(),
+        },
+        'Position state initialized from on-chain data'
+      );
+
+      // 10. Create position via create() method
       const createdPosition = await this.create({
         protocol: 'uniswapv3',
         positionType: 'CL_TICKS',
@@ -454,6 +474,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         poolId: pool.id,
         isToken0Quote,  // Boolean flag for token roles
         config,
+        state,
       });
 
       this.logger.info(
