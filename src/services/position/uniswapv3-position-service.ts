@@ -583,10 +583,9 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    *
    * Updates:
    * - Mutable state fields (liquidity, feeGrowthInside0/1LastX128, tokensOwed0/1, ownerAddress)
-   * - Recalculates PnL fields (currentValue, unrealizedPnl) based on fresh state and pool price
-   * - Recalculates unclaimedFees based on tokensOwed0/1
    *
    * Note: Config fields (chainId, nftId, ticks, poolAddress) are immutable and not updated.
+   * Note: PnL fields and fees are NOT recalculated in this implementation.
    *
    * @param id - Position ID
    * @returns Updated position with fresh on-chain state
@@ -598,17 +597,179 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   override async refresh(id: string): Promise<UniswapV3Position> {
     log.methodEntry(this.logger, 'refresh', { id });
 
-    // TODO: Implement refresh logic
-    // 1. Get existing position to verify it exists and get config
-    // 2. Verify chain is supported
-    // 3. Read fresh state from NonfungiblePositionManager contract
-    // 4. Fetch pool to get current price
-    // 5. Recalculate PnL and fees
-    // 6. Update position via update() method
+    try {
+      // 1. Get existing position to verify it exists and get config
+      const existingPosition = await this.findById(id);
 
-    const error = new Error('refresh() not yet implemented');
-    log.methodError(this.logger, 'refresh', error, { id });
-    throw error;
+      if (!existingPosition) {
+        const error = new Error(`Position not found: ${id}`);
+        log.methodError(this.logger, 'refresh', error, { id });
+        throw error;
+      }
+
+      this.logger.debug(
+        {
+          id,
+          chainId: existingPosition.config.chainId,
+          nftId: existingPosition.config.nftId,
+        },
+        'Position found, proceeding with state refresh'
+      );
+
+      const { chainId, nftId } = existingPosition.config;
+
+      // 2. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(chainId)) {
+        const error = new Error(
+          `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+            .getSupportedChainIds()
+            .join(', ')}`
+        );
+        log.methodError(this.logger, 'refresh', error, { id, chainId });
+        throw error;
+      }
+
+      this.logger.debug(
+        { id, chainId },
+        'Chain is supported, proceeding with on-chain state read'
+      );
+
+      // 3. Read fresh state from NonfungiblePositionManager contract
+      const positionManagerAddress = getPositionManagerAddress(chainId);
+      const client = this.evmConfig.getPublicClient(chainId);
+
+      this.logger.debug(
+        { id, positionManagerAddress, nftId, chainId },
+        'Reading fresh position state from NonfungiblePositionManager'
+      );
+
+      const [positionData, ownerAddress] = await Promise.all([
+        client.readContract({
+          address: positionManagerAddress,
+          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+          functionName: 'positions',
+          args: [BigInt(nftId)],
+        }) as Promise<
+          readonly [
+            bigint,
+            Address,
+            Address,
+            Address,
+            number,
+            number,
+            number,
+            bigint,
+            bigint,
+            bigint,
+            bigint,
+            bigint,
+          ]
+        >,
+        client.readContract({
+          address: positionManagerAddress,
+          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+          functionName: 'ownerOf',
+          args: [BigInt(nftId)],
+        }) as Promise<Address>,
+      ]);
+
+      // Parse position data
+      const position: UniswapV3PositionData = {
+        nonce: positionData[0],
+        operator: positionData[1],
+        token0: positionData[2],
+        token1: positionData[3],
+        fee: positionData[4],
+        tickLower: positionData[5],
+        tickUpper: positionData[6],
+        liquidity: positionData[7],
+        feeGrowthInside0LastX128: positionData[8],
+        feeGrowthInside1LastX128: positionData[9],
+        tokensOwed0: positionData[10],
+        tokensOwed1: positionData[11],
+      };
+
+      this.logger.debug(
+        {
+          id,
+          liquidity: position.liquidity.toString(),
+          tokensOwed0: position.tokensOwed0.toString(),
+          tokensOwed1: position.tokensOwed1.toString(),
+          owner: ownerAddress,
+        },
+        'Fresh position state read from contract'
+      );
+
+      // 4. Create updated state object
+      const updatedState: UniswapV3PositionState = {
+        ownerAddress: normalizeAddress(ownerAddress),
+        liquidity: position.liquidity,
+        feeGrowthInside0LastX128: position.feeGrowthInside0LastX128,
+        feeGrowthInside1LastX128: position.feeGrowthInside1LastX128,
+        tokensOwed0: position.tokensOwed0,
+        tokensOwed1: position.tokensOwed1,
+      };
+
+      this.logger.debug(
+        {
+          id,
+          ownerAddress: updatedState.ownerAddress,
+          liquidity: updatedState.liquidity.toString(),
+        },
+        'Updated state object created from on-chain data'
+      );
+
+      // 5. Update database with new state
+      const stateDB = this.serializeState(updatedState);
+
+      log.dbOperation(this.logger, 'update', 'Position', {
+        id,
+        fields: ['state'],
+      });
+
+      const result = await this.prisma.position.update({
+        where: { id },
+        data: {
+          state: stateDB as object,
+        },
+        include: {
+          pool: {
+            include: {
+              token0: true,
+              token1: true,
+            },
+          },
+        },
+      });
+
+      // 6. Map database result to Position type
+      const refreshedPosition = this.mapToPosition(result as any);
+
+      this.logger.info(
+        {
+          id,
+          chainId,
+          nftId,
+          liquidity: updatedState.liquidity.toString(),
+        },
+        'Position state refreshed successfully'
+      );
+
+      log.methodExit(this.logger, 'refresh', { id });
+      return refreshedPosition as UniswapV3Position;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          (error.message.includes('not found') ||
+            error.message.includes('Chain'))
+        )
+      ) {
+        log.methodError(this.logger, 'refresh', error as Error, { id });
+      }
+      throw error;
+    }
   }
 
   // ============================================================================
