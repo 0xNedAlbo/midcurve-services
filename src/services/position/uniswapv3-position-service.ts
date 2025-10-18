@@ -11,6 +11,7 @@ import type {
   UniswapV3PositionState,
   UniswapV3Position,
 } from '../../shared/types/uniswapv3/position.js';
+import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
 import type {
   UniswapV3PositionDiscoverInput,
   CreatePositionInput,
@@ -32,7 +33,15 @@ import {
 } from '../../utils/evm/index.js';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { EtherscanClient } from '../../clients/etherscan/index.js';
+import { UniswapV3PositionLedgerService } from '../position-ledger/uniswapv3-position-ledger-service.js';
 import type { Address } from 'viem';
+import {
+  computeFeeGrowthInside,
+  calculateIncrementalFees,
+} from '../../shared/utils/uniswapv3/fees.js';
+import { calculatePositionValue } from '../../shared/utils/uniswapv3/liquidity.js';
+import { tickToPrice } from '../../shared/utils/uniswapv3/price.js';
+import { uniswapV3PoolAbi } from '../../utils/uniswapv3/pool-abi.js';
 
 /**
  * Dependencies for UniswapV3PositionService
@@ -62,6 +71,12 @@ export interface UniswapV3PositionServiceDependencies {
    * If not provided, the singleton EtherscanClient instance will be used
    */
   etherscanClient?: EtherscanClient;
+
+  /**
+   * Uniswap V3 position ledger service for fetching position history
+   * If not provided, a new UniswapV3PositionLedgerService instance will be created
+   */
+  ledgerService?: import('../position-ledger/uniswapv3-position-ledger-service.js').UniswapV3PositionLedgerService;
 }
 
 /**
@@ -74,6 +89,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   private readonly _evmConfig: EvmConfig;
   private readonly _poolService: UniswapV3PoolService;
   private readonly _etherscanClient: EtherscanClient;
+  private readonly _ledgerService: UniswapV3PositionLedgerService;
 
   /**
    * Creates a new UniswapV3PositionService instance
@@ -83,6 +99,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
    * @param dependencies.poolService - UniswapV3 pool service (creates default if not provided)
    * @param dependencies.etherscanClient - Etherscan client instance (uses singleton if not provided)
+   * @param dependencies.ledgerService - UniswapV3 position ledger service (creates default if not provided)
    */
   constructor(dependencies: UniswapV3PositionServiceDependencies = {}) {
     super(dependencies);
@@ -92,6 +109,9 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       new UniswapV3PoolService({ prisma: this.prisma });
     this._etherscanClient =
       dependencies.etherscanClient ?? EtherscanClient.getInstance();
+    this._ledgerService =
+      dependencies.ledgerService ??
+      new UniswapV3PositionLedgerService({ prisma: this.prisma });
   }
 
   /**
@@ -113,6 +133,13 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    */
   protected get etherscanClient(): EtherscanClient {
     return this._etherscanClient;
+  }
+
+  /**
+   * Get the position ledger service instance
+   */
+  protected get ledgerService(): UniswapV3PositionLedgerService {
+    return this._ledgerService;
   }
 
   // ============================================================================
@@ -333,8 +360,8 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         );
 
         if (events.length > 0) {
-          // Get the latest event's block number
-          const latestEvent = events[events.length - 1]; // Events are sorted chronologically
+          // Get the latest event's block number (safe to use ! since we checked length)
+          const latestEvent = events[events.length - 1]!;
           blockNumber = BigInt(latestEvent.blockNumber) - 1n; // Block before the last event
 
           this.logger.debug(
@@ -550,12 +577,79 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Position discovered and created'
       );
 
+      // 11. Calculate and update common fields
+      try {
+        this.logger.debug(
+          { positionId: createdPosition.id },
+          'Calculating position common fields'
+        );
+
+        // Get ledger summary (cost basis, realized PnL, fees)
+        const ledgerSummary = await this.getLedgerSummary(createdPosition.id);
+
+        // Calculate current position value
+        const currentValue = this.calculateCurrentPositionValue(
+          createdPosition,
+          pool
+        );
+
+        // Calculate unrealized PnL
+        const unrealizedPnl = currentValue - ledgerSummary.costBasis;
+
+        // Calculate unclaimed fees
+        const unClaimedFees = await this.calculateUnclaimedFees(
+          createdPosition,
+          pool
+        );
+
+        // Calculate price range
+        const { priceRangeLower, priceRangeUpper } = this.calculatePriceRange(
+          createdPosition,
+          pool
+        );
+
+        // Update position with calculated fields
+        await this.updatePositionCommonFields(createdPosition.id, {
+          currentValue,
+          currentCostBasis: ledgerSummary.costBasis,
+          realizedPnl: ledgerSummary.realizedPnl,
+          unrealizedPnl,
+          collectedFees: ledgerSummary.collectedFees,
+          unClaimedFees,
+          lastFeesCollectedAt: ledgerSummary.lastFeesCollectedAt.getTime() === 0
+            ? createdPosition.positionOpenedAt
+            : ledgerSummary.lastFeesCollectedAt,
+          priceRangeLower,
+          priceRangeUpper,
+        });
+
+        this.logger.info(
+          {
+            positionId: createdPosition.id,
+            currentValue: currentValue.toString(),
+            costBasis: ledgerSummary.costBasis.toString(),
+            unrealizedPnl: unrealizedPnl.toString(),
+          },
+          'Position common fields calculated and updated'
+        );
+      } catch (error) {
+        this.logger.warn(
+          {
+            error,
+            positionId: createdPosition.id,
+          },
+          'Failed to calculate/update common fields, position created without financial data'
+        );
+      }
+
       log.methodExit(this.logger, 'discover', {
         id: createdPosition.id,
         fromDatabase: false,
       });
 
-      return createdPosition;
+      // Re-fetch position with updated fields
+      const finalPosition = await this.findById(createdPosition.id);
+      return finalPosition ?? createdPosition;
     } catch (error) {
       // Only log if not already logged
       if (
@@ -803,7 +897,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       });
 
       // 6. Map database result to Position type
-      const refreshedPosition = this.mapToPosition(result as any);
+      const refreshedPosition = this.mapToPosition(result as any) as UniswapV3Position;
 
       this.logger.info(
         {
@@ -815,8 +909,76 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Position state refreshed successfully'
       );
 
+      // 7. Recalculate and update common fields
+      try {
+        this.logger.debug({ positionId: id }, 'Recalculating position common fields');
+
+        // Use embedded pool object from position
+        const pool = refreshedPosition.pool;
+
+        // Get ledger summary (cost basis, realized PnL, fees)
+        const ledgerSummary = await this.getLedgerSummary(id);
+
+        // Calculate current position value with refreshed state
+        const currentValue = this.calculateCurrentPositionValue(
+          refreshedPosition,
+          pool
+        );
+
+        // Calculate unrealized PnL
+        const unrealizedPnl = currentValue - ledgerSummary.costBasis;
+
+        // Calculate unclaimed fees with refreshed state
+        const unClaimedFees = await this.calculateUnclaimedFees(
+          refreshedPosition,
+          pool
+        );
+
+        // Price range is immutable, but recalculate for completeness
+        const { priceRangeLower, priceRangeUpper } = this.calculatePriceRange(
+          refreshedPosition,
+          pool
+        );
+
+        // Update position with recalculated fields
+        await this.updatePositionCommonFields(id, {
+          currentValue,
+          currentCostBasis: ledgerSummary.costBasis,
+          realizedPnl: ledgerSummary.realizedPnl,
+          unrealizedPnl,
+          collectedFees: ledgerSummary.collectedFees,
+          unClaimedFees,
+          lastFeesCollectedAt: ledgerSummary.lastFeesCollectedAt.getTime() === 0
+            ? refreshedPosition.positionOpenedAt
+            : ledgerSummary.lastFeesCollectedAt,
+          priceRangeLower,
+          priceRangeUpper,
+        });
+
+        this.logger.info(
+          {
+            positionId: id,
+            currentValue: currentValue.toString(),
+            unrealizedPnl: unrealizedPnl.toString(),
+            unClaimedFees: unClaimedFees.toString(),
+          },
+          'Position common fields recalculated and updated'
+        );
+      } catch (error) {
+        this.logger.warn(
+          {
+            error,
+            positionId: id,
+          },
+          'Failed to recalculate/update common fields, returning position with stale financial data'
+        );
+      }
+
       log.methodExit(this.logger, 'refresh', { id });
-      return refreshedPosition as UniswapV3Position;
+
+      // Re-fetch position with updated fields
+      const finalPosition = await this.findById(id);
+      return finalPosition ?? refreshedPosition;
     } catch (error) {
       // Only log if not already logged
       if (
@@ -1009,7 +1171,354 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   }
 
   // ============================================================================
-  // HELPER METHODS
+  // HELPER METHODS - FINANCIAL CALCULATIONS
+  // ============================================================================
+
+  /**
+   * Get ledger summary for a position
+   *
+   * Fetches the latest ledger event and extracts financial summary data.
+   *
+   * @param positionId - Position database ID
+   * @returns Summary object with cost basis, PnL, and fee data
+   */
+  private async getLedgerSummary(positionId: string): Promise<{
+    costBasis: bigint;
+    realizedPnl: bigint;
+    collectedFees: bigint;
+    lastFeesCollectedAt: Date;
+  }> {
+    try {
+      // Fetch all ledger events (sorted descending by timestamp)
+      const events = await this.ledgerService.findAllItems(positionId);
+
+      if (events.length === 0) {
+        // No events yet - position just created
+        return {
+          costBasis: 0n,
+          realizedPnl: 0n,
+          collectedFees: 0n,
+          lastFeesCollectedAt: new Date(), // Will be set to positionOpenedAt by caller
+        };
+      }
+
+      // Latest event is first (descending order) - safe to use ! since we checked length
+      const latestEvent = events[0]!;
+
+      // Sum all COLLECT event rewards for collected fees
+      let collectedFees = 0n;
+      let lastFeesCollectedAt: Date | null = null;
+
+      for (const event of events) {
+        if (event.eventType === 'COLLECT' && event.rewards.length > 0) {
+          // Sum up all reward values (already in quote token)
+          for (const reward of event.rewards) {
+            collectedFees += reward.tokenValue;
+          }
+          // Track most recent collection timestamp
+          if (!lastFeesCollectedAt || event.timestamp > lastFeesCollectedAt) {
+            lastFeesCollectedAt = event.timestamp;
+          }
+        }
+      }
+
+      return {
+        costBasis: latestEvent.costBasisAfter,
+        realizedPnl: latestEvent.pnlAfter,
+        collectedFees,
+        lastFeesCollectedAt: lastFeesCollectedAt ?? new Date(),
+      };
+    } catch (error) {
+      this.logger.warn(
+        { error, positionId },
+        'Failed to get ledger summary, using defaults'
+      );
+      return {
+        costBasis: 0n,
+        realizedPnl: 0n,
+        collectedFees: 0n,
+        lastFeesCollectedAt: new Date(),
+      };
+    }
+  }
+
+  /**
+   * Calculate unclaimed fees for a position
+   *
+   * Reads tick data from pool contract and calculates fee growth inside the position range.
+   *
+   * @param position - Position object with config and state
+   * @param pool - Pool object with current state
+   * @returns Unclaimed fees in quote token value
+   */
+  private async calculateUnclaimedFees(
+    position: UniswapV3Position,
+    pool: UniswapV3Pool
+  ): Promise<bigint> {
+    try {
+      const { chainId, poolAddress, tickLower, tickUpper } = position.config;
+      const { liquidity, feeGrowthInside0LastX128, feeGrowthInside1LastX128 } = position.state;
+
+      // If no liquidity, no fees
+      if (liquidity === 0n) {
+        return 0n;
+      }
+
+      const client = this.evmConfig.getPublicClient(chainId);
+
+      // Read pool global fee growth and tick data
+      const [feeGrowthGlobal0X128, feeGrowthGlobal1X128, tickDataLower, tickDataUpper] =
+        await Promise.all([
+          client.readContract({
+            address: poolAddress as Address,
+            abi: uniswapV3PoolAbi,
+            functionName: 'feeGrowthGlobal0X128',
+          }) as Promise<bigint>,
+          client.readContract({
+            address: poolAddress as Address,
+            abi: uniswapV3PoolAbi,
+            functionName: 'feeGrowthGlobal1X128',
+          }) as Promise<bigint>,
+          client.readContract({
+            address: poolAddress as Address,
+            abi: uniswapV3PoolAbi,
+            functionName: 'ticks',
+            args: [tickLower],
+          }) as Promise<readonly [bigint, bigint, bigint, bigint, bigint, bigint, number, boolean]>,
+          client.readContract({
+            address: poolAddress as Address,
+            abi: uniswapV3PoolAbi,
+            functionName: 'ticks',
+            args: [tickUpper],
+          }) as Promise<readonly [bigint, bigint, bigint, bigint, bigint, bigint, number, boolean]>,
+        ]);
+
+      // Extract feeGrowthOutside from tick data
+      const feeGrowthOutsideLower0X128 = tickDataLower[2];
+      const feeGrowthOutsideLower1X128 = tickDataLower[3];
+      const feeGrowthOutsideUpper0X128 = tickDataUpper[2];
+      const feeGrowthOutsideUpper1X128 = tickDataUpper[3];
+
+      // Calculate fee growth inside using pool's current tick
+      const feeGrowthInside = computeFeeGrowthInside(
+        pool.state.currentTick,
+        tickLower,
+        tickUpper,
+        feeGrowthGlobal0X128,
+        feeGrowthGlobal1X128,
+        feeGrowthOutsideLower0X128,
+        feeGrowthOutsideLower1X128,
+        feeGrowthOutsideUpper0X128,
+        feeGrowthOutsideUpper1X128
+      );
+
+      // Calculate incremental fees (fees earned since last checkpoint)
+      const incremental0 = calculateIncrementalFees(
+        feeGrowthInside.inside0,
+        feeGrowthInside0LastX128,
+        liquidity
+      );
+      const incremental1 = calculateIncrementalFees(
+        feeGrowthInside.inside1,
+        feeGrowthInside1LastX128,
+        liquidity
+      );
+
+      // Convert to quote token value
+      const token0Decimals = pool.token0.decimals;
+      const token1Decimals = pool.token1.decimals;
+      const sqrtPriceX96 = pool.state.sqrtPriceX96;
+
+      // Calculate value based on token roles
+      let unclaimedFeesValue: bigint;
+      if (position.isToken0Quote) {
+        // token0 = quote, token1 = base
+        // Value = fee0 + (fee1 * price)
+        // price = token0 per token1 = Q192 / (sqrtPriceX96^2)
+        const fee1InToken0 = (incremental1 * (2n ** 192n)) / (sqrtPriceX96 * sqrtPriceX96);
+        // Adjust for decimals: fee1InToken0 is in token0 units, need to scale by decimal difference
+        const decimalDiff = token1Decimals - token0Decimals;
+        const fee1Adjusted = decimalDiff >= 0
+          ? fee1InToken0 / (10n ** BigInt(Math.abs(decimalDiff)))
+          : fee1InToken0 * (10n ** BigInt(Math.abs(decimalDiff)));
+        unclaimedFeesValue = incremental0 + fee1Adjusted;
+      } else {
+        // token0 = base, token1 = quote
+        // Value = (fee0 * price) + fee1
+        // price = token1 per token0 = (sqrtPriceX96^2) / Q192
+        const fee0InToken1 = (incremental0 * sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
+        // Adjust for decimals
+        const decimalDiff = token0Decimals - token1Decimals;
+        const fee0Adjusted = decimalDiff >= 0
+          ? fee0InToken1 / (10n ** BigInt(Math.abs(decimalDiff)))
+          : fee0InToken1 * (10n ** BigInt(Math.abs(decimalDiff)));
+        unclaimedFeesValue = fee0Adjusted + incremental1;
+      }
+
+      return unclaimedFeesValue;
+    } catch (error) {
+      this.logger.warn(
+        { error, positionId: position.id },
+        'Failed to calculate unclaimed fees, using 0'
+      );
+      return 0n;
+    }
+  }
+
+  /**
+   * Calculate current position value
+   *
+   * Uses liquidity utility to calculate token amounts and convert to quote value.
+   *
+   * @param position - Position object with config and state
+   * @param pool - Pool object with current state
+   * @returns Current position value in quote token units
+   */
+  private calculateCurrentPositionValue(
+    position: UniswapV3Position,
+    pool: UniswapV3Pool
+  ): bigint {
+    const { tickLower, tickUpper } = position.config;
+    const { liquidity } = position.state;
+    const { sqrtPriceX96 } = pool.state;
+
+    if (liquidity === 0n) {
+      return 0n;
+    }
+
+    // Determine token roles
+    const baseToken = position.isToken0Quote ? pool.token1 : pool.token0;
+    const quoteToken = position.isToken0Quote ? pool.token0 : pool.token1;
+    const baseIsToken0 = !position.isToken0Quote;
+
+    // Calculate current pool price (quote per base)
+    let currentPrice: bigint;
+    const quoteDecimals = BigInt(quoteToken.decimals);
+    const baseDecimals = BigInt(baseToken.decimals);
+
+    if (position.isToken0Quote) {
+      // token0 = quote, token1 = base
+      // price = token0 per token1 = Q192 / (sqrtPriceX96^2)
+      currentPrice = (2n ** 192n) / (sqrtPriceX96 * sqrtPriceX96);
+      // Scale to quote decimals
+      currentPrice = (currentPrice * (10n ** quoteDecimals)) / (10n ** baseDecimals);
+    } else {
+      // token0 = base, token1 = quote
+      // price = token1 per token0 = (sqrtPriceX96^2) / Q192
+      currentPrice = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
+      // Scale to quote decimals
+      currentPrice = (currentPrice * (10n ** quoteDecimals)) / (10n ** baseDecimals);
+    }
+
+    // Calculate position value using utility function
+    const positionValue = calculatePositionValue(
+      liquidity,
+      sqrtPriceX96,
+      tickLower,
+      tickUpper,
+      currentPrice,
+      baseIsToken0,
+      baseToken.decimals
+    );
+
+    return positionValue;
+  }
+
+  /**
+   * Calculate price range bounds
+   *
+   * Converts tick bounds to prices in quote token.
+   *
+   * @param position - Position object with config
+   * @param pool - Pool object with token data
+   * @returns Price range lower and upper bounds in quote token
+   */
+  private calculatePriceRange(
+    position: UniswapV3Position,
+    pool: UniswapV3Pool
+  ): { priceRangeLower: bigint; priceRangeUpper: bigint } {
+    const { tickLower, tickUpper } = position.config;
+
+    // Determine token addresses and decimals based on token roles
+    const baseToken = position.isToken0Quote ? pool.token1 : pool.token0;
+    const quoteToken = position.isToken0Quote ? pool.token0 : pool.token1;
+    const baseTokenAddress = baseToken.config.address;
+    const quoteTokenAddress = quoteToken.config.address;
+    const baseTokenDecimals = baseToken.decimals;
+
+    // Convert ticks to prices (quote per base)
+    const priceRangeLower = tickToPrice(
+      tickLower,
+      baseTokenAddress,
+      quoteTokenAddress,
+      baseTokenDecimals
+    );
+
+    const priceRangeUpper = tickToPrice(
+      tickUpper,
+      baseTokenAddress,
+      quoteTokenAddress,
+      baseTokenDecimals
+    );
+
+    return { priceRangeLower, priceRangeUpper };
+  }
+
+  /**
+   * Update position common fields in database
+   *
+   * Updates all financial and metadata fields for a position.
+   *
+   * @param positionId - Position database ID
+   * @param fields - Fields to update
+   */
+  private async updatePositionCommonFields(
+    positionId: string,
+    fields: {
+      currentValue: bigint;
+      currentCostBasis: bigint;
+      realizedPnl: bigint;
+      unrealizedPnl: bigint;
+      collectedFees: bigint;
+      unClaimedFees: bigint;
+      lastFeesCollectedAt: Date;
+      priceRangeLower: bigint;
+      priceRangeUpper: bigint;
+    }
+  ): Promise<void> {
+    log.dbOperation(this.logger, 'update', 'Position', {
+      id: positionId,
+      fields: ['currentValue', 'currentCostBasis', 'realizedPnl', 'unrealizedPnl', 'collectedFees', 'unClaimedFees', 'lastFeesCollectedAt', 'priceRangeLower', 'priceRangeUpper'],
+    });
+
+    await this.prisma.position.update({
+      where: { id: positionId },
+      data: {
+        currentValue: fields.currentValue.toString(),
+        currentCostBasis: fields.currentCostBasis.toString(),
+        realizedPnl: fields.realizedPnl.toString(),
+        unrealizedPnl: fields.unrealizedPnl.toString(),
+        collectedFees: fields.collectedFees.toString(),
+        unClaimedFees: fields.unClaimedFees.toString(),
+        lastFeesCollectedAt: fields.lastFeesCollectedAt,
+        priceRangeLower: fields.priceRangeLower.toString(),
+        priceRangeUpper: fields.priceRangeUpper.toString(),
+      },
+    });
+
+    this.logger.debug(
+      {
+        positionId,
+        currentValue: fields.currentValue.toString(),
+        currentCostBasis: fields.currentCostBasis.toString(),
+        unrealizedPnl: fields.unrealizedPnl.toString(),
+      },
+      'Position common fields updated'
+    );
+  }
+
+  // ============================================================================
+  // HELPER METHODS - POSITION LOOKUP
   // ============================================================================
 
   /**
