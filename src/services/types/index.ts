@@ -49,8 +49,22 @@ export type {
 } from './pool-price/index.js';
 
 // Uniswap V3 service types
-export type { UniswapV3PoolStateDB } from './uniswapv3/index.js';
-export { toPoolState, toPoolStateDB } from './uniswapv3/index.js';
+export type {
+  UniswapV3PoolStateDB,
+  UniswapV3LedgerEventConfigDB,
+  UniswapV3IncreaseLiquidityEventDB,
+  UniswapV3DecreaseLiquidityEventDB,
+  UniswapV3CollectEventDB,
+  UniswapV3LedgerEventStateDB,
+} from './uniswapv3/index.js';
+export {
+  toPoolState,
+  toPoolStateDB,
+  toEventConfig,
+  toEventConfigDB,
+  toEventState,
+  toEventStateDB,
+} from './uniswapv3/index.js';
 
 // Position input types
 export type {
@@ -59,3 +73,15 @@ export type {
   UniswapV3PositionDiscoverInput,
   PositionDiscoverInput,
 } from './position/index.js';
+
+// Position Ledger Event input types
+export type {
+  CreatePositionLedgerEventInput,
+  CreateUniswapV3LedgerEventInput,
+  CreateAnyLedgerEventInput,
+  UniswapV3LedgerEventDiscoverInput,
+  PositionLedgerEventDiscoverInputMap,
+  PositionLedgerEventDiscoverInput,
+  UniswapV3EventDiscoverInput,
+  AnyLedgerEventDiscoverInput,
+} from './position-ledger/index.js';
