@@ -19,3 +19,15 @@ export type {
   UniswapV3PoolPriceConfig,
   UniswapV3PoolPriceState,
 } from './pool-price.js';
+
+export type {
+  UniswapV3LedgerEvent,
+  UniswapV3LedgerEventConfig,
+  UniswapV3LedgerEventState,
+  UniswapV3IncreaseLiquidityEvent,
+  UniswapV3DecreaseLiquidityEvent,
+  UniswapV3CollectEvent,
+  UniswapV3IncreaseLedgerEvent,
+  UniswapV3DecreaseLedgerEvent,
+  UniswapV3CollectLedgerEvent,
+} from './position-ledger-event.js';

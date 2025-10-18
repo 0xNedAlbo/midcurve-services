@@ -39,6 +39,18 @@ export type {
   AnyPoolPrice,
 } from './pool-price.js';
 
+// Position Ledger Event types
+export type {
+  PositionLedgerEvent,
+  EventType,
+  Reward,
+  LedgerEventProtocol,
+  PositionLedgerEventConfigMap,
+  PositionLedgerEventStateMap,
+  UniswapV3LedgerEvent,
+  AnyLedgerEvent,
+} from './position-ledger-event.js';
+
 // Uniswap V3 types (protocol-specific)
 export type {
   UniswapV3PoolConfig,
@@ -47,4 +59,12 @@ export type {
   UniswapV3PositionState,
   UniswapV3PoolPriceConfig,
   UniswapV3PoolPriceState,
+  UniswapV3LedgerEventConfig,
+  UniswapV3LedgerEventState,
+  UniswapV3IncreaseLiquidityEvent,
+  UniswapV3DecreaseLiquidityEvent,
+  UniswapV3CollectEvent,
+  UniswapV3IncreaseLedgerEvent,
+  UniswapV3DecreaseLedgerEvent,
+  UniswapV3CollectLedgerEvent,
 } from './uniswapv3/index.js';

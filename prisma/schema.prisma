@@ -147,6 +147,9 @@ model Position {
   config Json // Immutable: chainId, nftId, poolAddress, ticks, etc.
   state  Json // Mutable: ownerAddress, liquidity, feeGrowth, tokensOwed, etc.
 
+  // Relations
+  ledgerEvents PositionLedgerEvent[]
+
   // Indexes for efficient queries
   @@index([protocol])
   @@index([positionType])
@@ -184,4 +187,50 @@ model PoolPrice {
   @@index([poolId])
   @@index([timestamp])
   @@index([poolId, timestamp]) // Compound index for time-range queries on specific pool
+}
+
+model PositionLedgerEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Position reference
+  positionId String
+  position   Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  // Protocol and event chaining
+  protocol      String // 'uniswapv3', etc.
+  previousId    String? // null for first event
+  previousEvent PositionLedgerEvent?  @relation("EventChain", fields: [previousId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  nextEvents    PositionLedgerEvent[] @relation("EventChain")
+
+  // Event identification
+  timestamp DateTime // Block timestamp (from blockchain)
+  eventType String // 'INCREASE_POSITION', 'DECREASE_POSITION', 'COLLECT'
+  inputHash String   @unique // MD5(positionId + blockNumber + txIndex + logIndex)
+
+  // Financial data (stored as string for bigint precision)
+  poolPrice    String // bigint as string - Quote tokens per 1 Base token (in smallest units)
+  token0Amount String // bigint as string - Token0 amount in smallest units
+  token1Amount String // bigint as string - Token1 amount in smallest units
+  tokenValue   String // bigint as string - Total value in quote token units
+  rewards      Json // Array of {tokenId: string, tokenAmount: string, tokenValue: string}
+
+  // PnL tracking (stored as string for bigint precision)
+  deltaCostBasis String // bigint as string - Change in cost basis from this event
+  costBasisAfter String // bigint as string - Cumulative cost basis after this event
+  deltaPnl       String // bigint as string - Change in realized PnL from this event
+  pnlAfter       String // bigint as string - Cumulative realized PnL after this event
+
+  // Protocol-specific data (JSON)
+  config Json // Protocol-specific config (blockNumber, txIndex, logIndex, liquidity, fees, etc.)
+  state  Json // Raw event data (INCREASE_LIQUIDITY, DECREASE_LIQUIDITY, COLLECT)
+
+  // Indexes for efficient queries
+  @@index([positionId, timestamp]) // Time-series queries for position
+  @@index([protocol]) // Filter by protocol
+  @@index([eventType]) // Filter by event type
+  @@index([inputHash]) // Deduplication lookups
+  @@index([previousId]) // Event chain traversal
+  @@map("position_ledger_events")
 }
