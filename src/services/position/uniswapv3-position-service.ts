@@ -31,6 +31,7 @@ import {
   compareAddresses,
 } from '../../utils/evm/index.js';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
+import { EtherscanClient } from '../../clients/etherscan/index.js';
 import type { Address } from 'viem';
 
 /**
@@ -55,6 +56,12 @@ export interface UniswapV3PositionServiceDependencies {
    * If not provided, a new UniswapV3PoolService instance will be created
    */
   poolService?: UniswapV3PoolService;
+
+  /**
+   * Etherscan client for fetching position events (needed for burned positions)
+   * If not provided, the singleton EtherscanClient instance will be used
+   */
+  etherscanClient?: EtherscanClient;
 }
 
 /**
@@ -66,6 +73,7 @@ export interface UniswapV3PositionServiceDependencies {
 export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   private readonly _evmConfig: EvmConfig;
   private readonly _poolService: UniswapV3PoolService;
+  private readonly _etherscanClient: EtherscanClient;
 
   /**
    * Creates a new UniswapV3PositionService instance
@@ -74,6 +82,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
    * @param dependencies.evmConfig - EVM configuration instance (uses singleton if not provided)
    * @param dependencies.poolService - UniswapV3 pool service (creates default if not provided)
+   * @param dependencies.etherscanClient - Etherscan client instance (uses singleton if not provided)
    */
   constructor(dependencies: UniswapV3PositionServiceDependencies = {}) {
     super(dependencies);
@@ -81,6 +90,8 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     this._poolService =
       dependencies.poolService ??
       new UniswapV3PoolService({ prisma: this.prisma });
+    this._etherscanClient =
+      dependencies.etherscanClient ?? EtherscanClient.getInstance();
   }
 
   /**
@@ -95,6 +106,13 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    */
   protected get poolService(): UniswapV3PoolService {
     return this._poolService;
+  }
+
+  /**
+   * Get the Etherscan client instance
+   */
+  protected get etherscanClient(): EtherscanClient {
+    return this._etherscanClient;
   }
 
   // ============================================================================
@@ -300,12 +318,52 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Chain is supported, proceeding with on-chain discovery'
       );
 
-      // 4. Read position data from NonfungiblePositionManager
+      // 4. For burned/closed positions, fetch latest event from Etherscan first
+      // This gives us a block number when the position still existed
+      this.logger.debug(
+        { chainId, nftId },
+        'Fetching position events from Etherscan to determine if position is burned'
+      );
+
+      let blockNumber: bigint | undefined;
+      try {
+        const events = await this.etherscanClient.fetchPositionEvents(
+          chainId,
+          nftId.toString()
+        );
+
+        if (events.length > 0) {
+          // Get the latest event's block number
+          const latestEvent = events[events.length - 1]; // Events are sorted chronologically
+          blockNumber = BigInt(latestEvent.blockNumber) - 1n; // Block before the last event
+
+          this.logger.debug(
+            {
+              latestEventBlock: latestEvent.blockNumber,
+              queryBlock: blockNumber.toString(),
+              eventType: latestEvent.eventType,
+            },
+            'Found events - will query position state at historic block'
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          { error, chainId, nftId },
+          'Failed to fetch events from Etherscan, will attempt current block query'
+        );
+      }
+
+      // 5. Read position data from NonfungiblePositionManager
       const positionManagerAddress = getPositionManagerAddress(chainId);
       const client = this.evmConfig.getPublicClient(chainId);
 
       this.logger.debug(
-        { positionManagerAddress, nftId, chainId },
+        {
+          positionManagerAddress,
+          nftId,
+          chainId,
+          blockNumber: blockNumber?.toString() ?? 'latest',
+        },
         'Reading position data from NonfungiblePositionManager'
       );
 
@@ -315,6 +373,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
           abi: UNISWAP_V3_POSITION_MANAGER_ABI,
           functionName: 'positions',
           args: [BigInt(nftId)],
+          blockNumber,
         }) as Promise<
           readonly [
             bigint,
@@ -336,6 +395,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
           abi: UNISWAP_V3_POSITION_MANAGER_ABI,
           functionName: 'ownerOf',
           args: [BigInt(nftId)],
+          blockNumber,
         }) as Promise<Address>,
       ]);
 

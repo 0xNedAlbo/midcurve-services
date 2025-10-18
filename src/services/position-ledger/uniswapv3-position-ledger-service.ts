@@ -724,7 +724,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
       const tokenValue = calculateTokenValueInQuote(
         amount0,
         amount1,
-        poolPrice,
+        sqrtPriceX96,
         token0IsQuote,
         token0Decimals,
         token1Decimals
@@ -763,7 +763,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
       const tokenValue = calculateTokenValueInQuote(
         amount0,
         amount1,
-        poolPrice,
+        sqrtPriceX96,
         token0IsQuote,
         token0Decimals,
         token1Decimals
@@ -803,7 +803,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
       const fee0Value = calculateTokenValueInQuote(
         feeAmount0,
         0n,
-        poolPrice,
+        sqrtPriceX96,
         token0IsQuote,
         token0Decimals,
         token1Decimals
@@ -811,7 +811,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
       const fee1Value = calculateTokenValueInQuote(
         0n,
         feeAmount1,
-        poolPrice,
+        sqrtPriceX96,
         token0IsQuote,
         token0Decimals,
         token1Decimals
@@ -852,7 +852,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
     const tokenValue = calculateTokenValueInQuote(
       amount0,
       amount1,
-      poolPrice,
+      sqrtPriceX96,
       token0IsQuote,
       token0Decimals,
       token1Decimals
@@ -936,6 +936,78 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
       amount1: input.amount1.toString(),
       recipient: input.recipient,
     };
+  }
+
+  /**
+   * Override findAllItems to use blockchain ordering instead of database timestamps
+   *
+   * This ensures deterministic event ordering based on blockchain coordinates
+   * (blockNumber, txIndex, logIndex) stored in the config field, rather than
+   * relying on database timestamps which can have collisions for events in the same block.
+   *
+   * @param positionId - Position database ID
+   * @returns Array of events, sorted descending by blockchain coordinates (newest first)
+   */
+  async findAllItems(positionId: string): Promise<UniswapV3LedgerEvent[]> {
+    log.methodEntry(this.logger, 'findAllItems (Uniswap V3 override)', { positionId });
+
+    try {
+      log.dbOperation(this.logger, 'findMany', 'PositionLedgerEvent', {
+        positionId,
+      });
+
+      // Fetch all events without ordering (we'll sort in-memory)
+      const results = await this.prisma.positionLedgerEvent.findMany({
+        where: {
+          positionId,
+          protocol: 'uniswapv3',
+        },
+      });
+
+      // Map to typed events
+      const events = results.map((r) =>
+        this.mapToLedgerEvent(r as LedgerEventDbResult)
+      );
+
+      // Sort by blockchain coordinates (descending - newest first)
+      events.sort((a, b) => {
+        const configA = a.config as UniswapV3LedgerEventConfig;
+        const configB = b.config as UniswapV3LedgerEventConfig;
+
+        // Compare block numbers (descending)
+        if (configA.blockNumber > configB.blockNumber) return -1;
+        if (configA.blockNumber < configB.blockNumber) return 1;
+
+        // Same block: compare transaction index (descending)
+        if (configA.txIndex > configB.txIndex) return -1;
+        if (configA.txIndex < configB.txIndex) return 1;
+
+        // Same transaction: compare log index (descending)
+        if (configA.logIndex > configB.logIndex) return -1;
+        if (configA.logIndex < configB.logIndex) return 1;
+
+        return 0;
+      });
+
+      this.logger.debug(
+        {
+          positionId,
+          count: events.length,
+        },
+        'Events retrieved and sorted by blockchain coordinates'
+      );
+
+      log.methodExit(this.logger, 'findAllItems', {
+        positionId,
+        count: events.length,
+      });
+      return events;
+    } catch (error) {
+      log.methodError(this.logger, 'findAllItems', error as Error, {
+        positionId,
+      });
+      throw error;
+    }
   }
 
   /**
