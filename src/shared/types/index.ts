@@ -54,6 +54,12 @@ export type {
 // Position APR Period types
 export type { PositionAprPeriod, AprPeriodSummary } from './position-apr-period.js';
 
+// Quote Token Result types
+export type {
+  QuoteTokenResult,
+  UniswapV3QuoteTokenResult,
+} from './quote-token-result.js';
+
 // Uniswap V3 types (protocol-specific)
 export type {
   UniswapV3PoolConfig,

@@ -18,3 +18,9 @@ export {
   getFactoryAddress,
   type UniswapV3PositionData,
 } from './uniswapv3.js';
+
+export {
+  DEFAULT_QUOTE_TOKENS_BY_CHAIN,
+  getDefaultQuoteTokens,
+  hasDefaultQuoteTokens,
+} from './quote-tokens.js';

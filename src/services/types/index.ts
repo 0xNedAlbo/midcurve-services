@@ -85,3 +85,10 @@ export type {
   UniswapV3EventDiscoverInput,
   AnyLedgerEventDiscoverInput,
 } from './position-ledger/index.js';
+
+// Quote Token input types
+export type {
+  QuoteTokenInput,
+  QuoteTokenInputMap,
+  UniswapV3QuoteTokenInput,
+} from './quote-token/index.js';
