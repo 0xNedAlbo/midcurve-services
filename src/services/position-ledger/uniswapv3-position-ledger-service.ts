@@ -396,7 +396,11 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
         );
       }
 
-      // 7. Return complete history
+      // 7. Calculate APR periods from ledger events
+      this.logger.info({ positionId }, 'Calculating APR periods');
+      await this.aprService.refresh(positionId);
+
+      // 8. Return complete history
       const allEvents = await this.findAllItems(positionId);
 
       this.logger.info(
@@ -527,7 +531,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
         positionId,
       });
 
-      // 8. Save event and return complete history
+      // 8. Save event and refresh APR calculations
       const allEvents = await this.addItem(positionId, eventInput);
 
       this.logger.info(
@@ -540,6 +544,10 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
         },
         'Single event discovered and saved'
       );
+
+      // 9. Refresh APR periods
+      this.logger.info({ positionId }, 'Refreshing APR periods');
+      await this.aprService.refresh(positionId);
 
       log.methodExit(this.logger, 'discoverEvent', { count: allEvents.length });
       return allEvents;

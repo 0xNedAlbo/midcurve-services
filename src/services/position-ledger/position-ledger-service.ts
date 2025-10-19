@@ -28,6 +28,7 @@ import type {
 } from '../types/position-ledger/position-ledger-event-input.js';
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
+import { PositionAprService } from '../position-apr/position-apr-service.js';
 
 /**
  * Dependencies for PositionLedgerService
@@ -39,6 +40,13 @@ export interface PositionLedgerServiceDependencies {
    * If not provided, a new PrismaClient instance will be created
    */
   prisma?: PrismaClient;
+
+  /**
+   * Position APR service for calculating fee-based returns
+   * If not provided, a new PositionAprService instance will be created
+   * APR calculation is mandatory and runs automatically after ledger discovery
+   */
+  aprService?: PositionAprService;
 }
 
 /**
@@ -80,6 +88,7 @@ export abstract class PositionLedgerService<
   P extends keyof PositionLedgerEventConfigMap,
 > {
   protected readonly _prisma: PrismaClient;
+  protected readonly _aprService: PositionAprService;
   protected readonly logger: ServiceLogger;
 
   /**
@@ -87,9 +96,11 @@ export abstract class PositionLedgerService<
    *
    * @param dependencies - Optional dependencies object
    * @param dependencies.prisma - Prisma client instance (creates default if not provided)
+   * @param dependencies.aprService - APR service instance (creates default if not provided)
    */
   constructor(dependencies: PositionLedgerServiceDependencies = {}) {
     this._prisma = dependencies.prisma ?? new PrismaClient();
+    this._aprService = dependencies.aprService ?? new PositionAprService({ prisma: this._prisma });
     this.logger = createServiceLogger(this.constructor.name);
   }
 
@@ -98,6 +109,13 @@ export abstract class PositionLedgerService<
    */
   protected get prisma(): PrismaClient {
     return this._prisma;
+  }
+
+  /**
+   * Get the APR service instance
+   */
+  protected get aprService(): PositionAprService {
+    return this._aprService;
   }
 
   // ============================================================================

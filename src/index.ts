@@ -31,6 +31,7 @@ export * from './services/token/index.js';
 export * from './services/pool/index.js';
 export * from './services/pool-price/index.js';
 export * from './services/position/index.js';
+export * from './services/position-apr/index.js';
 export * from './services/cache/index.js';
 
 export const version = '0.1.0';

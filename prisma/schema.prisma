@@ -149,6 +149,7 @@ model Position {
 
   // Relations
   ledgerEvents PositionLedgerEvent[]
+  aprPeriods   PositionAprPeriod[]
 
   // Indexes for efficient queries
   @@index([protocol])
@@ -233,4 +234,39 @@ model PositionLedgerEvent {
   @@index([inputHash]) // Deduplication lookups
   @@index([previousId]) // Event chain traversal
   @@map("position_ledger_events")
+}
+
+model PositionAprPeriod {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Position reference
+  positionId String
+  position   Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  // Period boundaries (events that define this period)
+  startEventId String // Event that started this period (INCREASE_POSITION or COLLECT)
+  endEventId   String // Event that ended this period (next COLLECT or last event)
+
+  // Time range
+  startTimestamp  DateTime // When period started
+  endTimestamp    DateTime // When period ended (or last event time)
+  durationSeconds Int // endTimestamp - startTimestamp (in seconds)
+
+  // Financial metrics (stored as string for bigint precision)
+  costBasis         String // Average cost basis during period (in quote token units)
+  collectedFeeValue String // Total fees collected during period (in quote token units)
+
+  // APR calculation
+  aprBps Int // Annual Percentage Rate in basis points (e.g., 2500 = 25.00%)
+
+  // For debugging/auditing
+  eventCount Int // Number of events included in period calculation
+
+  // Indexes for efficient queries
+  @@index([positionId, startTimestamp]) // Time-range queries for position
+  @@index([positionId, endTimestamp]) // Time-range queries for position
+  @@index([aprBps]) // Sort/filter by APR performance
+  @@map("position_apr_periods")
 }

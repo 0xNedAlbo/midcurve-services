@@ -51,6 +51,9 @@ export type {
   AnyLedgerEvent,
 } from './position-ledger-event.js';
 
+// Position APR Period types
+export type { PositionAprPeriod, AprPeriodSummary } from './position-apr-period.js';
+
 // Uniswap V3 types (protocol-specific)
 export type {
   UniswapV3PoolConfig,

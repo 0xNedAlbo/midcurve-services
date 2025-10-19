@@ -586,8 +586,23 @@ describe('UniswapV3PositionLedgerService', () => {
         ...INCREASE_POSITION_FIRST.dbResult,
       } as any);
 
+      // Mock findMany for:
+      // 1. First addItem call (returns first event)
+      // 2. Second addItem call (returns both events)
+      // 3. APR service calculateAprPeriods (returns both events)
+      // 4. Final findAllItems call (returns both events)
       prismaMock.positionLedgerEvent.findMany
         .mockResolvedValueOnce([
+          {
+            id: 'event_001',
+            ...INCREASE_POSITION_FIRST.dbResult,
+          } as any,
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 'event_002',
+            ...DECREASE_POSITION_SECOND.dbResult,
+          } as any,
           {
             id: 'event_001',
             ...INCREASE_POSITION_FIRST.dbResult,
