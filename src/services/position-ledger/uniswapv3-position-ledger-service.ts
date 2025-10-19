@@ -14,7 +14,10 @@
 
 import { createHash } from 'crypto';
 import { PositionLedgerService } from './position-ledger-service.js';
-import type { PositionLedgerServiceDependencies } from './position-ledger-service.js';
+import type {
+  PositionLedgerServiceDependencies,
+  LedgerEventDbResult,
+} from './position-ledger-service.js';
 import type {
   UniswapV3LedgerEvent,
   UniswapV3LedgerEventConfig,
@@ -948,7 +951,7 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
    * @param positionId - Position database ID
    * @returns Array of events, sorted descending by blockchain coordinates (newest first)
    */
-  async findAllItems(positionId: string): Promise<UniswapV3LedgerEvent[]> {
+  override async findAllItems(positionId: string): Promise<UniswapV3LedgerEvent[]> {
     log.methodEntry(this.logger, 'findAllItems (Uniswap V3 override)', { positionId });
 
     try {

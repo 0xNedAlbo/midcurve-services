@@ -44,7 +44,7 @@ export interface PositionLedgerServiceDependencies {
 /**
  * Generic ledger event result from database (before deserialization)
  */
-interface LedgerEventDbResult {
+export interface LedgerEventDbResult {
   id: string;
   createdAt: Date;
   updatedAt: Date;
