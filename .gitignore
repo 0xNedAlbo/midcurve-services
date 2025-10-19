@@ -45,3 +45,7 @@ prisma/migrations/
 *.temp
 .cache/
 temp/
+
+# yalc local npm repo
+.yalc/
+yalc.lock

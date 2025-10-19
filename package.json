@@ -33,7 +33,11 @@
     "db:test:reset": "docker-compose -f docker-compose.test.yml down -v && docker-compose -f docker-compose.test.yml up -d",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "yalc:link": "yalc add @midcurve/shared && npm install",
+    "yalc:update": "yalc update @midcurve/shared",
+    "yalc:unlink": "yalc remove @midcurve/shared && npm install",
+    "yalc:clean": "rimraf .yalc yalc.lock"
   },
   "keywords": [
     "midcurve",
@@ -52,10 +56,11 @@
     "prisma": "^5.7.0",
     "typescript": "^5.3.3",
     "vitest": "^3.2.4",
-    "vitest-mock-extended": "^3.1.0"
+    "vitest-mock-extended": "^3.1.0",
+    "yalc": "^1.0.0-pre.53"
   },
   "dependencies": {
-    "@midcurve/shared": "file:../midcurve-shared",
+    "@midcurve/shared": "file:.yalc/@midcurve/shared",
     "@prisma/client": "^5.7.0",
     "@uniswap/sdk-core": "^7.8.0",
     "@uniswap/v3-sdk": "^3.26.0",
