@@ -162,6 +162,8 @@ describe('CoinGeckoClient', () => {
       } as Response);
 
       const promise = client.getAllTokens();
+      // Add catch handler to prevent unhandled rejection warning
+      promise.catch(() => {});
 
       // Fast-forward through all retry delays
       await vi.runAllTimersAsync();
@@ -197,6 +199,8 @@ describe('CoinGeckoClient', () => {
       } as Response);
 
       const promise = client.getAllTokens();
+      // Add catch handler to prevent unhandled rejection warning
+      promise.catch(() => {});
 
       // Fast-forward through all retry delays
       await vi.runAllTimersAsync();

@@ -127,6 +127,9 @@ describe('RequestScheduler', () => {
       const promise2 = scheduler.schedule(task2);
       const promise3 = scheduler.schedule(task3);
 
+      // Add catch handlers to prevent unhandled rejection warnings
+      promise2.catch(() => {});
+
       await vi.runAllTimersAsync();
 
       await expect(promise1).resolves.toBe('success');
@@ -153,6 +156,9 @@ describe('RequestScheduler', () => {
       const task = vi.fn().mockRejectedValue(error);
 
       const promise = scheduler.schedule(task);
+      // Add catch handler to prevent unhandled rejection warning
+      promise.catch(() => {});
+
       await vi.runAllTimersAsync();
 
       await expect(promise).rejects.toThrow('Task execution failed');
@@ -331,6 +337,8 @@ describe('RequestScheduler', () => {
 
       scheduler = new RequestScheduler(1000);
       const promise = scheduler.schedule(task);
+      // Add catch handler to prevent unhandled rejection warning
+      promise.catch(() => {});
 
       await vi.runAllTimersAsync();
       await expect(promise).rejects.toThrow('Sync error');
