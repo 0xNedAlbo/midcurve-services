@@ -936,8 +936,7 @@ describe('UniswapV3PoolService - Integration Tests', () => {
           positionType: 'CL_TICKS',
           userId: user.id,
           poolId: pool.id,
-          baseTokenId: pool.token0.id,
-          quoteTokenId: pool.token1.id,
+          isToken0Quote: false, // token1 (WETH) is the quote token
           currentValue: '0',
           currentCostBasis: '0',
           realizedPnl: '0',
