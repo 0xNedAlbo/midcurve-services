@@ -636,13 +636,16 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
           'Position common fields calculated and updated'
         );
       } catch (error) {
-        this.logger.warn(
+        // Clean up orphaned position before re-throwing
+        this.logger.error(
           {
             error,
             positionId: createdPosition.id,
           },
-          'Failed to calculate/update common fields, position created without financial data'
+          'Failed to calculate/update common fields, deleting orphaned position'
         );
+        await this.delete(createdPosition.id);
+        throw error;
       }
 
       log.methodExit(this.logger, 'discover', {
@@ -913,69 +916,59 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       );
 
       // 7. Recalculate and update common fields
-      try {
-        this.logger.debug({ positionId: id }, 'Recalculating position common fields');
+      this.logger.debug({ positionId: id }, 'Recalculating position common fields');
 
-        // Use embedded pool object from position
-        const pool = refreshedPosition.pool;
+      // Use embedded pool object from position
+      const pool = refreshedPosition.pool;
 
-        // Get ledger summary (cost basis, realized PnL, fees)
-        const ledgerSummary = await this.getLedgerSummary(id);
+      // Get ledger summary (cost basis, realized PnL, fees)
+      const ledgerSummary = await this.getLedgerSummary(id);
 
-        // Calculate current position value with refreshed state
-        const currentValue = this.calculateCurrentPositionValue(
-          refreshedPosition,
-          pool
-        );
+      // Calculate current position value with refreshed state
+      const currentValue = this.calculateCurrentPositionValue(
+        refreshedPosition,
+        pool
+      );
 
-        // Calculate unrealized PnL
-        const unrealizedPnl = currentValue - ledgerSummary.costBasis;
+      // Calculate unrealized PnL
+      const unrealizedPnl = currentValue - ledgerSummary.costBasis;
 
-        // Calculate unclaimed fees with refreshed state
-        const unClaimedFees = await this.calculateUnclaimedFees(
-          refreshedPosition,
-          pool
-        );
+      // Calculate unclaimed fees with refreshed state
+      const unClaimedFees = await this.calculateUnclaimedFees(
+        refreshedPosition,
+        pool
+      );
 
-        // Price range is immutable, but recalculate for completeness
-        const { priceRangeLower, priceRangeUpper } = this.calculatePriceRange(
-          refreshedPosition,
-          pool
-        );
+      // Price range is immutable, but recalculate for completeness
+      const { priceRangeLower, priceRangeUpper } = this.calculatePriceRange(
+        refreshedPosition,
+        pool
+      );
 
-        // Update position with recalculated fields
-        await this.updatePositionCommonFields(id, {
-          currentValue,
-          currentCostBasis: ledgerSummary.costBasis,
-          realizedPnl: ledgerSummary.realizedPnl,
-          unrealizedPnl,
-          collectedFees: ledgerSummary.collectedFees,
-          unClaimedFees,
-          lastFeesCollectedAt: ledgerSummary.lastFeesCollectedAt.getTime() === 0
-            ? refreshedPosition.positionOpenedAt
-            : ledgerSummary.lastFeesCollectedAt,
-          priceRangeLower,
-          priceRangeUpper,
-        });
+      // Update position with recalculated fields
+      await this.updatePositionCommonFields(id, {
+        currentValue,
+        currentCostBasis: ledgerSummary.costBasis,
+        realizedPnl: ledgerSummary.realizedPnl,
+        unrealizedPnl,
+        collectedFees: ledgerSummary.collectedFees,
+        unClaimedFees,
+        lastFeesCollectedAt: ledgerSummary.lastFeesCollectedAt.getTime() === 0
+          ? refreshedPosition.positionOpenedAt
+          : ledgerSummary.lastFeesCollectedAt,
+        priceRangeLower,
+        priceRangeUpper,
+      });
 
-        this.logger.info(
-          {
-            positionId: id,
-            currentValue: currentValue.toString(),
-            unrealizedPnl: unrealizedPnl.toString(),
-            unClaimedFees: unClaimedFees.toString(),
-          },
-          'Position common fields recalculated and updated'
-        );
-      } catch (error) {
-        this.logger.warn(
-          {
-            error,
-            positionId: id,
-          },
-          'Failed to recalculate/update common fields, returning position with stale financial data'
-        );
-      }
+      this.logger.info(
+        {
+          positionId: id,
+          currentValue: currentValue.toString(),
+          unrealizedPnl: unrealizedPnl.toString(),
+          unClaimedFees: unClaimedFees.toString(),
+        },
+        'Position common fields recalculated and updated'
+      );
 
       log.methodExit(this.logger, 'refresh', { id });
 
