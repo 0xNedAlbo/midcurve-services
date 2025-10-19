@@ -111,7 +111,10 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       dependencies.etherscanClient ?? EtherscanClient.getInstance();
     this._ledgerService =
       dependencies.ledgerService ??
-      new UniswapV3PositionLedgerService({ prisma: this.prisma });
+      new UniswapV3PositionLedgerService({
+        prisma: this.prisma,
+        positionService: this, // Pass self to break circular dependency
+      });
   }
 
   /**
