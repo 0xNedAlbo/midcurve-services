@@ -30,6 +30,14 @@ describe('EvmConfig', () => {
 
   describe('constructor and initialization', () => {
     it('should mark RPC URLs as invalid when env vars not set', () => {
+      // Explicitly remove RPC URL env vars
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
       const config = new EvmConfig();
 
       // Should not throw during construction
@@ -255,6 +263,9 @@ describe('EvmConfig', () => {
     });
 
     it('should respect new env vars after reset', () => {
+      // Delete RPC URL env var for first instance
+      delete process.env['RPC_URL_ETHEREUM'];
+
       // First instance without env var should throw
       const instance1 = EvmConfig.getInstance();
       expect(() => instance1.getChainConfig(SupportedChainId.ETHEREUM)).toThrow(
@@ -307,6 +318,7 @@ describe('EvmConfig', () => {
     it('should mix configured and unconfigured chains', () => {
       process.env['RPC_URL_ETHEREUM'] = 'https://custom-eth.com';
       // Leave ARBITRUM unconfigured
+      delete process.env['RPC_URL_ARBITRUM'];
 
       const config = new EvmConfig();
 
@@ -322,7 +334,14 @@ describe('EvmConfig', () => {
 
   describe('RPC URL validation', () => {
     it('should throw comprehensive error when RPC URL is missing', () => {
-      // No env vars set
+      // No env vars set - explicitly delete
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
       const config = new EvmConfig();
 
       expect(() => config.getChainConfig(SupportedChainId.ETHEREUM)).toThrow(
@@ -350,6 +369,14 @@ describe('EvmConfig', () => {
     });
 
     it('should throw with correct env var name for each chain', () => {
+      // Delete all RPC URL env vars
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
       const config = new EvmConfig();
 
       expect(() => config.getChainConfig(SupportedChainId.ETHEREUM)).toThrow(
@@ -373,6 +400,14 @@ describe('EvmConfig', () => {
     });
 
     it('should include chain name and ID in error message', () => {
+      // Delete all RPC URL env vars
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
       const config = new EvmConfig();
 
       expect(() => config.getChainConfig(SupportedChainId.ARBITRUM)).toThrow(
@@ -391,6 +426,14 @@ describe('EvmConfig', () => {
     });
 
     it('should include setup instructions in error message', () => {
+      // Delete all RPC URL env vars
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
       const config = new EvmConfig();
 
       expect(() => config.getChainConfig(SupportedChainId.ETHEREUM)).toThrow(
@@ -410,9 +453,17 @@ describe('EvmConfig', () => {
     });
 
     it('should allow access to configured chains while blocking unconfigured ones', () => {
+      // Delete all first
+      delete process.env['RPC_URL_ETHEREUM'];
+      delete process.env['RPC_URL_ARBITRUM'];
+      delete process.env['RPC_URL_BASE'];
+      delete process.env['RPC_URL_BSC'];
+      delete process.env['RPC_URL_POLYGON'];
+      delete process.env['RPC_URL_OPTIMISM'];
+
+      // Set only specific ones
       process.env['RPC_URL_ETHEREUM'] = 'https://eth-rpc.com';
       process.env['RPC_URL_BASE'] = 'https://base-rpc.com';
-      // Leave others unconfigured
 
       const config = new EvmConfig();
 
