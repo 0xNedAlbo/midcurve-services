@@ -10,13 +10,13 @@ import { PoolPriceService } from './pool-price-service.js';
 import type {
   UniswapV3PoolPriceConfig,
   UniswapV3PoolPriceState,
-} from '../../shared/types/pool-price-config.js';
+} from '@midcurve/shared';
 import type {
   CreatePoolPriceInput,
   UpdatePoolPriceInput,
   UniswapV3PoolPriceDiscoverInput,
 } from '../types/pool-price/pool-price-input.js';
-import type { UniswapV3PoolPrice } from '../../shared/types/uniswapv3/pool-price.js';
+import type { UniswapV3PoolPrice } from '@midcurve/shared';
 import {
   WETH_USDC_POOL_PRICE_ARBITRUM,
   WBTC_USDC_POOL_PRICE_ARBITRUM,

@@ -9,9 +9,9 @@
  * - PancakeSwap (BSC)
  */
 
-// Export shared types
+// Re-export shared types from @midcurve/shared
 // These are used across API, UI, and Workers
-export * from './shared/types/index.js';
+export * from '@midcurve/shared';
 
 // Export utilities
 export * from './utils/index.js';

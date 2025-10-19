@@ -8,8 +8,8 @@ import type {
   UniswapV3PoolConfig,
   UniswapV3PoolState,
   UniswapV3Pool,
-} from '../../shared/types/uniswapv3/pool.js';
-import type { Erc20Token } from '../../shared/types/token.js';
+} from '@midcurve/shared';
+import type { Erc20Token } from '@midcurve/shared';
 
 /**
  * Fixture structure for pools

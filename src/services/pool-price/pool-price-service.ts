@@ -13,7 +13,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { PoolPrice, PoolPriceConfigMap } from '../../shared/types/pool-price.js';
+import type { PoolPrice, PoolPriceConfigMap } from '@midcurve/shared';
 import type {
   CreatePoolPriceInput,
   UpdatePoolPriceInput,

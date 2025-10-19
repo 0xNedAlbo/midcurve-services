@@ -9,13 +9,13 @@
  * - Conversion functions (to/from DB format)
  */
 
-import type { UniswapV3LedgerEventConfig } from '../../../shared/types/uniswapv3/position-ledger-event-config.js';
+import type { UniswapV3LedgerEventConfig } from '@midcurve/shared';
 import type {
   UniswapV3LedgerEventState,
   UniswapV3IncreaseLiquidityEvent,
   UniswapV3DecreaseLiquidityEvent,
   UniswapV3CollectEvent,
-} from '../../../shared/types/uniswapv3/position-ledger-event-state.js';
+} from '@midcurve/shared';
 
 // ============================================================================
 // CONFIG SERIALIZATION

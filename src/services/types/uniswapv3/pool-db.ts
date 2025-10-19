@@ -5,7 +5,7 @@
  * PostgreSQL JSON fields store bigint as strings to avoid precision loss.
  */
 
-import type { UniswapV3PoolState } from '../../../shared/types/uniswapv3/pool.js';
+import type { UniswapV3PoolState } from '@midcurve/shared';
 
 /**
  * Uniswap V3 Pool State (Database Format)

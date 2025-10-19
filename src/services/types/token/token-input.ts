@@ -3,7 +3,7 @@
  * These types are used for database operations and are not shared with UI/API
  */
 
-import type { Token, TokenConfigMap } from "../../../shared/types/token.js";
+import type { Token, TokenConfigMap } from '@midcurve/shared';
 
 /**
  * Input type for creating a new token

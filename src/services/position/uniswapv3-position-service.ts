@@ -10,8 +10,8 @@ import type {
   UniswapV3PositionConfig,
   UniswapV3PositionState,
   UniswapV3Position,
-} from '../../shared/types/uniswapv3/position.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
+} from '@midcurve/shared';
+import type { UniswapV3Pool } from '@midcurve/shared';
 import type {
   UniswapV3PositionDiscoverInput,
   CreatePositionInput,
@@ -30,7 +30,7 @@ import {
   isValidAddress,
   normalizeAddress,
   compareAddresses,
-} from '../../utils/evm/index.js';
+} from '@midcurve/shared';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { EtherscanClient } from '../../clients/etherscan/index.js';
 import { UniswapV3PositionLedgerService } from '../position-ledger/uniswapv3-position-ledger-service.js';
@@ -38,9 +38,9 @@ import type { Address } from 'viem';
 import {
   computeFeeGrowthInside,
   calculateIncrementalFees,
-} from '../../shared/utils/uniswapv3/fees.js';
-import { calculatePositionValue } from '../../shared/utils/uniswapv3/liquidity.js';
-import { tickToPrice } from '../../shared/utils/uniswapv3/price.js';
+} from '@midcurve/shared';
+import { calculatePositionValue } from '@midcurve/shared';
+import { tickToPrice } from '@midcurve/shared';
 import { uniswapV3PoolAbi } from '../../utils/uniswapv3/pool-abi.js';
 
 /**

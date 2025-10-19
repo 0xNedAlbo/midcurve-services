@@ -8,9 +8,9 @@ import type {
   UniswapV3PositionConfig,
   UniswapV3PositionState,
   UniswapV3Position,
-} from '../../shared/types/uniswapv3/position.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
-import type { Erc20Token } from '../../shared/types/token.js';
+} from '@midcurve/shared';
+import type { UniswapV3Pool } from '@midcurve/shared';
+import type { Erc20Token } from '@midcurve/shared';
 
 /**
  * Fixture structure for positions

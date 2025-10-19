@@ -31,7 +31,7 @@ import crypto from 'crypto';
 import { createServiceLogger, log } from '../../../logging/index.js';
 import type { ServiceLogger } from '../../../logging/index.js';
 import { CacheService } from '../../../services/cache/index.js';
-import { normalizeAddress } from '../../../utils/evm/index.js';
+import { normalizeAddress } from '@midcurve/shared';
 import {
   getUniswapV3SubgraphEndpoint,
   isUniswapV3SubgraphSupported,

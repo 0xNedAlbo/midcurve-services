@@ -7,13 +7,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockDeep, type DeepMockProxy } from 'vitest-mock-extended';
 import { PrismaClient } from '@prisma/client';
 import { TokenService } from './token-service.js';
-import type { Erc20TokenConfig } from '../../shared/types/token-config.js';
+import type { Erc20TokenConfig } from '@midcurve/shared';
 import type {
   CreateTokenInput,
   UpdateTokenInput,
   TokenDiscoverInput,
 } from '../types/token/token-input.js';
-import type { Token } from '../../shared/types/token.js';
+import type { Token } from '@midcurve/shared';
 import {
   USDC_ETHEREUM,
   WETH_ETHEREUM,

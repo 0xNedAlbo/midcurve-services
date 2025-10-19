@@ -6,8 +6,8 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { PoolConfigMap } from '../../shared/types/pool-config.js';
-import type { QuoteTokenResult } from '../../shared/types/quote-token-result.js';
+import type { PoolConfigMap } from '@midcurve/shared';
+import type { QuoteTokenResult } from '@midcurve/shared';
 import type { QuoteTokenInput } from '../types/quote-token/quote-token-input.js';
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';

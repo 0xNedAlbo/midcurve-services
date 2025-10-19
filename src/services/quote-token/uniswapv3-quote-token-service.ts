@@ -8,9 +8,9 @@
  */
 
 import { QuoteTokenService } from './quote-token-service.js';
-import type { QuoteTokenResult } from '../../shared/types/quote-token-result.js';
+import type { QuoteTokenResult } from '@midcurve/shared';
 import type { UniswapV3QuoteTokenInput } from '../types/quote-token/quote-token-input.js';
-import { normalizeAddress } from '../../utils/evm/index.js';
+import { normalizeAddress } from '@midcurve/shared';
 import { getDefaultQuoteTokens } from '../../config/quote-tokens.js';
 import { log } from '../../logging/index.js';
 

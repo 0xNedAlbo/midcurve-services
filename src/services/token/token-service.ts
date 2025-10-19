@@ -12,7 +12,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { Token, TokenConfigMap } from '../../shared/types/token.js';
+import type { Token, TokenConfigMap } from '@midcurve/shared';
 import type {
   CreateTokenInput,
   UpdateTokenInput,

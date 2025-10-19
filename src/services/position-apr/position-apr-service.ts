@@ -18,9 +18,9 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { PositionAprPeriod } from '../../shared/types/position-apr-period.js';
+import type { PositionAprPeriod } from '@midcurve/shared';
 import type { CreateAprPeriodInput } from '../types/position-apr/position-apr-input.js';
-import type { AnyLedgerEvent } from '../../shared/types/position-ledger-event.js';
+import type { AnyLedgerEvent } from '@midcurve/shared';
 import {
   calculateAprBps,
   calculateDurationSeconds,

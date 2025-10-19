@@ -13,7 +13,7 @@
 import { describe, expect, it, beforeEach, afterAll } from 'vitest';
 import { TokenService } from './token-service.js';
 import { getPrismaClient, disconnectPrisma, countAllRecords } from '../../test/helpers.js';
-import type { Erc20TokenConfig } from '../../shared/types/token-config.js';
+import type { Erc20TokenConfig } from '@midcurve/shared';
 import type {
   CreateTokenInput,
   UpdateTokenInput,

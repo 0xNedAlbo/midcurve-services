@@ -10,7 +10,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { Pool, PoolConfigMap } from '../../shared/types/pool.js';
+import type { Pool, PoolConfigMap } from '@midcurve/shared';
 import type {
   PoolDiscoverInput,
   CreatePoolInput,

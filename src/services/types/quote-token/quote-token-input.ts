@@ -5,7 +5,7 @@
  * NOT shared with UI/API (they receive QuoteTokenResult).
  */
 
-import type { PoolConfigMap } from '../../../shared/types/pool-config.js';
+import type { PoolConfigMap } from '@midcurve/shared';
 
 /**
  * Quote token determination input map

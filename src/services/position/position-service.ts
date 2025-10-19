@@ -10,7 +10,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { Position, PositionConfigMap } from '../../shared/types/position.js';
+import type { Position, PositionConfigMap } from '@midcurve/shared';
 import type {
   PositionDiscoverInput,
   CreatePositionInput,

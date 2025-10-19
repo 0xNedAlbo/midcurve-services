@@ -28,7 +28,7 @@ import {
   MOCK_POOL_METRICS,
   KNOWN_TOKEN_PAIRS,
 } from './test-fixtures.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
+import type { UniswapV3Pool } from '@midcurve/shared';
 
 describe('UniswapV3PoolDiscoveryService', () => {
   let prismaMock: DeepMockProxy<PrismaClient>;

@@ -15,8 +15,8 @@ import type { PoolPriceServiceDependencies } from './pool-price-service.js';
 import type {
   UniswapV3PoolPriceConfig,
   UniswapV3PoolPriceState,
-} from '../../shared/types/pool-price-config.js';
-import type { UniswapV3PoolPrice } from '../../shared/types/uniswapv3/pool-price.js';
+} from '@midcurve/shared';
+import type { UniswapV3PoolPrice } from '@midcurve/shared';
 import type {
   CreatePoolPriceInput,
   UniswapV3PoolPriceDiscoverInput,
@@ -36,8 +36,8 @@ import { uniswapV3PoolAbi } from '../../utils/uniswapv3/pool-abi.js';
 import {
   pricePerToken0InToken1,
   pricePerToken1InToken0,
-} from '../../shared/utils/uniswapv3/price.js';
-import type { UniswapV3PoolConfig } from '../../shared/types/uniswapv3/pool-config.js';
+} from '@midcurve/shared';
+import type { UniswapV3PoolConfig } from '@midcurve/shared';
 
 /**
  * Uniswap V3 Pool Price Service

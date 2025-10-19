@@ -3,7 +3,7 @@
  * Database-specific types for pool discovery and update operations
  */
 
-import type { Pool, PoolConfigMap } from '../../../shared/types/pool.js';
+import type { Pool, PoolConfigMap } from '@midcurve/shared';
 
 /**
  * Uniswap V3 Pool Discovery Input

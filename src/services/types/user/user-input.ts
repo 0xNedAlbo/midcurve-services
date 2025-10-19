@@ -5,7 +5,7 @@
  * These types are NOT shared with UI/API - they're specific to the service layer.
  */
 
-import type { User } from '../../../shared/types/user.js';
+import type { User } from '@midcurve/shared';
 
 /**
  * Input type for creating a new user

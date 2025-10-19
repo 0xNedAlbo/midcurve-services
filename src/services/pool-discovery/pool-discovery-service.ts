@@ -6,8 +6,8 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { Pool, PoolConfigMap } from '../../shared/types/pool.js';
-import type { PoolDiscoveryResult } from '../../shared/types/pool-discovery-result.js';
+import type { Pool, PoolConfigMap } from '@midcurve/shared';
+import type { PoolDiscoveryResult } from '@midcurve/shared';
 import type { PoolDiscoveryInput } from '../types/pool-discovery/pool-discovery-input.js';
 import { createServiceLogger } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';

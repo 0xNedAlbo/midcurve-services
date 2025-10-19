@@ -6,8 +6,9 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import type { Token } from "../../shared/types/token.js";
-import type { Erc20TokenConfig } from "../../shared/types/token-config.js";
+import type { Token } from '@midcurve/shared';
+import type { Erc20TokenConfig } from '@midcurve/shared';
+import { isValidAddress, normalizeAddress } from '@midcurve/shared';
 import type {
     CreateTokenInput,
     UpdateTokenInput,
@@ -15,8 +16,6 @@ import type {
 } from "../types/token/token-input.js";
 import { TokenService } from "./token-service.js";
 import {
-    isValidAddress,
-    normalizeAddress,
     readTokenMetadata,
     TokenMetadataError,
 } from "../../utils/evm/index.js";

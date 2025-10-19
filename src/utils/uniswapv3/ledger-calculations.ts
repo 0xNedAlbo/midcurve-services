@@ -21,7 +21,7 @@
 import {
   pricePerToken0InToken1,
   pricePerToken1InToken0,
-} from '../../shared/utils/uniswapv3/price.js';
+} from '@midcurve/shared';
 
 // ============================================================================
 // PRICE CALCULATIONS

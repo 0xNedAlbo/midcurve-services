@@ -21,7 +21,7 @@ import type {
   PositionLedgerEventStateMap,
   EventType,
   Reward,
-} from '../../shared/types/position-ledger-event.js';
+} from '@midcurve/shared';
 import type {
   CreatePositionLedgerEventInput,
   PositionLedgerEventDiscoverInput,

@@ -8,9 +8,9 @@
 import { PrismaClient } from '@prisma/client';
 import type { Address } from 'viem';
 import { PoolDiscoveryService } from './pool-discovery-service.js';
-import type { PoolDiscoveryResult } from '../../shared/types/pool-discovery-result.js';
+import type { PoolDiscoveryResult } from '@midcurve/shared';
 import type { UniswapV3PoolDiscoveryInput } from '../types/pool-discovery/pool-discovery-input.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
+import type { UniswapV3Pool } from '@midcurve/shared';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { UniswapV3SubgraphClient } from '../../clients/subgraph/uniswapv3/uniswapv3-subgraph-client.js';
 import {
@@ -23,12 +23,12 @@ import {
   isValidAddress,
   normalizeAddress,
   compareAddresses,
-} from '../../utils/evm/index.js';
+} from '@midcurve/shared';
 import {
   getFactoryAddress,
   UNISWAP_V3_FACTORY_ABI,
 } from '../../config/uniswapv3.js';
-import { FEE_TIERS } from '../../shared/utils/uniswapv3/types.js';
+import { FEE_TIERS } from '@midcurve/shared';
 import { log } from '../../logging/index.js';
 
 /**

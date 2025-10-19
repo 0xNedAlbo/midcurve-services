@@ -5,7 +5,7 @@
  * Provides consistent, realistic test data.
  */
 
-import type { User } from '../../shared/types/user.js';
+import type { User } from '@midcurve/shared';
 import type { CreateUserInput } from '../types/user/index.js';
 
 /**

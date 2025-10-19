@@ -12,7 +12,7 @@ import { PositionLedgerService } from './position-ledger-service.js';
 import type {
   UniswapV3LedgerEventConfig,
   UniswapV3LedgerEventState,
-} from '../../shared/types/uniswapv3/position-ledger-event-config.js';
+} from '@midcurve/shared';
 import type { CreateUniswapV3LedgerEventInput } from '../types/position-ledger/position-ledger-event-input.js';
 import {
   toEventConfig,

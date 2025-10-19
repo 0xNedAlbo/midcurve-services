@@ -8,7 +8,7 @@
 import type {
   UniswapV3PoolPriceConfig,
   UniswapV3PoolPriceState,
-} from '../../../../shared/types/pool-price-config.js';
+} from '@midcurve/shared';
 
 /**
  * Uniswap V3 Pool Price Config (Database)

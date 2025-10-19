@@ -32,28 +32,36 @@ Midcurve Services acts as the **foundational layer** that is consumed by:
 ### Architecture Benefits
 
 ```
-┌─────────────────────────────────────────────────┐
-│         Midcurve Finance Ecosystem              │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  ┌─────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │   API   │  │    UI    │  │   Workers    │  │
-│  │ (Vercel)│  │ (Next.js)│  │  (Node.js)   │  │
-│  └────┬────┘  └─────┬────┘  └──────┬───────┘  │
-│       │             │               │          │
-│       └─────────────┴───────────────┘          │
-│                     │                          │
-│            ┌────────▼─────────┐                │
-│            │ Midcurve Services│                │
-│            │  (This Project)  │                │
-│            └──────────────────┘                │
-│                     │                          │
-│            ┌────────▼─────────┐                │
-│            │    PostgreSQL     │                │
-│            │   (Prisma ORM)    │                │
-│            └──────────────────┘                │
-│                                                 │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│            Midcurve Finance Ecosystem                │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  ┌─────────┐  ┌──────────┐  ┌──────────────┐       │
+│  │   API   │  │    UI    │  │   Workers    │       │
+│  │ (Vercel)│  │ (Next.js)│  │  (Node.js)   │       │
+│  └────┬────┘  └─────┬────┘  └──────┬───────┘       │
+│       │             │               │               │
+│       │             └───────┬───────┘               │
+│       │                     │                       │
+│       │            ┌────────▼─────────┐             │
+│       │            │ @midcurve/shared │             │
+│       │            │ Types + Utils    │             │
+│       │            └────────┬─────────┘             │
+│       │                     │                       │
+│       └─────────────────────┘                       │
+│                     │                               │
+│            ┌────────▼─────────┐                     │
+│            │ Midcurve Services│                     │
+│            │  (This Project)  │                     │
+│            │  Business Logic  │                     │
+│            └──────────────────┘                     │
+│                     │                               │
+│            ┌────────▼─────────┐                     │
+│            │    PostgreSQL     │                     │
+│            │   (Prisma ORM)    │                     │
+│            └──────────────────┘                     │
+│                                                      │
+└──────────────────────────────────────────────────────┘
 ```
 
 **Key Advantages:**
@@ -324,20 +332,64 @@ type CosmosToken = Token<CosmosTokenConfig>;
 
 **No database migration needed!** The JSON field and indexes accommodate the new structure immediately.
 
+## Package Organization
+
+Midcurve Finance is organized into two complementary packages:
+
+### @midcurve/shared (Separate Repository)
+
+**Repository:** `../midcurve-shared/`
+
+A standalone TypeScript package containing:
+- **Types**: All shared type definitions (Token, Pool, Position, etc.)
+- **Utilities**: Pure utility functions
+  - EVM address utilities (validation, normalization, comparison)
+  - UniswapV3 calculations (price, liquidity, position math)
+  - Mathematical helpers
+
+**Purpose:**
+- Consumed by all Midcurve projects (API, UI, Workers, Services)
+- Zero dependencies on databases or services
+- Framework-agnostic (works in Node.js, browser, edge runtimes)
+- Independently versioned and published to npm
+
+**Installation:**
+```bash
+npm install @midcurve/shared
+```
+
+**Usage:**
+```typescript
+import { Token, Erc20Token, normalizeAddress, sqrtPriceX96ToPrice } from '@midcurve/shared';
+```
+
+### @midcurve/services (This Repository)
+
+Contains:
+- **Services**: Business logic and CRUD operations (requires Prisma)
+- **Config**: Chain configuration and RPC management
+- **Clients**: External API clients (CoinGecko, Etherscan, Subgraphs)
+- **Service-specific utilities**: ERC-20 contract readers, APR calculations
+- **Database schema**: Prisma models and migrations
+
+**Dependency:**
+```json
+{
+  "dependencies": {
+    "@midcurve/shared": "file:../midcurve-shared"
+  }
+}
+```
+
+**Key Difference:**
+- `@midcurve/shared` = Pure types + utilities (no DB, no services)
+- `@midcurve/services` = Business logic + DB operations (consumes shared)
+
 ## Project Structure
 
 ```
 midcurve-services/
 ├── src/
-│   ├── shared/                    # Shared types (API/UI/Workers)
-│   │   └── types/                 # TypeScript interfaces
-│   │       ├── token.ts           # Abstract Token interface
-│   │       ├── token-config.ts    # Erc20/Solana configs
-│   │       ├── pool.ts            # Abstract Pool interface
-│   │       ├── uniswapv3/         # Protocol-specific types
-│   │       │   └── pool.ts        # UniswapV3 Config/State/Pool
-│   │       └── index.ts           # Barrel exports
-│   │
 │   ├── cache/                     # Distributed caching layer
 │   │   ├── cache-service.ts       # PostgreSQL-based cache
 │   │   ├── cache-service.test.ts  # Cache tests
@@ -375,13 +427,14 @@ midcurve-services/
 │   │       │   └── index.ts
 │   │       └── index.ts
 │   │
-│   ├── utils/                     # Utility functions
-│   │   ├── evm.ts                 # Address validation/normalization
-│   │   ├── evm.test.ts            # Utils tests
-│   │   ├── erc20-abi.ts           # Minimal ERC-20 ABI
-│   │   ├── erc20-reader.ts        # Contract metadata reader
-│   │   ├── erc20-reader.test.ts   # Reader tests
-│   │   └── index.ts
+│   ├── utils/                     # Service-specific utilities
+│   │   ├── evm/                   # EVM utilities (services-specific)
+│   │   │   ├── erc20-abi.ts           # Minimal ERC-20 ABI
+│   │   │   ├── erc20-reader.ts        # Contract metadata reader
+│   │   │   ├── erc20-reader.test.ts   # Reader tests
+│   │   │   └── index.ts
+│   │   ├── apr/                   # APR calculation utilities
+│   │   └── request-scheduler/     # Rate limiting utilities
 │   │
 │   └── index.ts                   # Main entry point
 │
@@ -396,10 +449,7 @@ midcurve-services/
 
 ### Directory Organization
 
-**`src/shared/types/`** - Types shared across all applications
-- Consumed by API, UI, and Workers
-- No database-specific types
-- Platform abstractions (Token, Pool)
+**Note:** Shared types and utilities are now in the `@midcurve/shared` package (separate repository).
 
 **`src/cache/`** - Distributed caching layer
 - PostgreSQL-based cache service
@@ -424,10 +474,11 @@ midcurve-services/
 - NOT shared with UI/API (they don't have DB access)
 - DB serialization types (e.g., bigint → string)
 
-**`src/utils/`** - Utility functions
-- EVM address operations (validation, normalization, comparison)
-- ERC-20 token utilities (ABI, contract readers)
-- Future: Solana utilities, math helpers, formatters
+**`src/utils/`** - Service-specific utility functions
+- ERC-20 contract readers (requires viem and RPC access)
+- APR calculation utilities (requires position history data)
+- Request scheduling and rate limiting (for external APIs)
+- Note: Core utilities (address validation, math) are in `@midcurve/shared`
 
 ## Technology Stack
 
@@ -1153,8 +1204,14 @@ app.post('/api/admin/cache/clear', async (req, res) => {
 
 ## Future Roadmap
 
-### Phase 1: Extract Shared Types
-The `src/shared` directory will be extracted into a separate repository (`@midcurve/shared`) to be consumed as an independent package by all projects.
+### ✅ Phase 1: Extract Shared Types (COMPLETED)
+The `src/shared` directory has been successfully extracted into a separate repository (`@midcurve/shared`) and is now consumed as an independent package by all projects.
+
+**Completed:**
+- Created `@midcurve/shared` package with types and utilities
+- Migrated EVM address utilities and UniswapV3 math functions
+- Updated all import paths in `@midcurve/services`
+- All tests passing (107 tests in shared, 645 tests in services)
 
 ### Phase 2: Service Layer Implementation
 Implement core services:
@@ -1428,18 +1485,18 @@ npm run type-check
 
 ## Integration Example
 
-### In API/UI/Workers Projects
+### In API/UI/Workers Projects (Using @midcurve/shared)
 
 ```typescript
-// Import shared types
+// Import shared types and utilities from @midcurve/shared
 import {
   Token,
   Erc20Token,
-  SolanaToken,
   AnyToken,
   Erc20TokenConfig,
-  SolanaTokenConfig,
-} from '@midcurve/services';
+  normalizeAddress,
+  sqrtPriceX96ToPrice,
+} from '@midcurve/shared';
 
 // Use the shared types
 function processToken(token: AnyToken) {
@@ -1466,21 +1523,22 @@ function getExplorerUrl(token: Erc20Token): string {
 }
 ```
 
-### In Service Layer (Server-Side Only)
+### In Service Layer (Server-Side Only - Using @midcurve/services)
 
 ```typescript
-// Import services
+// Import shared types and utilities from @midcurve/shared
+import {
+  Token,
+  Erc20Token,
+  normalizeAddress,
+  isValidAddress,
+} from '@midcurve/shared';
+
+// Import services from @midcurve/services
 import {
   TokenService,
   Erc20TokenService,
   type CreateErc20TokenInput,
-} from '@midcurve/services';
-
-// Import utilities
-import {
-  isValidAddress,
-  normalizeAddress,
-  compareAddresses,
 } from '@midcurve/services';
 
 // Use services

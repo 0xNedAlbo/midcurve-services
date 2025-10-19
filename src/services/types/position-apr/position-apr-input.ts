@@ -5,7 +5,7 @@
  * These types are used exclusively by the service layer and are NOT shared with UI/API.
  */
 
-import type { PositionAprPeriod } from '../../../shared/types/position-apr-period.js';
+import type { PositionAprPeriod } from '@midcurve/shared';
 
 // ============================================================================
 // CREATE INPUT

@@ -5,7 +5,7 @@
  * These types omit database-generated fields (id, createdAt, updatedAt).
  */
 
-import type { PoolPrice, PoolPriceConfigMap } from '../../../shared/types/pool-price.js';
+import type { PoolPrice, PoolPriceConfigMap } from '@midcurve/shared';
 
 /**
  * Uniswap V3 Pool Price Discovery Input

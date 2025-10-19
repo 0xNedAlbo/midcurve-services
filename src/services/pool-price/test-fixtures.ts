@@ -9,7 +9,7 @@ import type {
   CreatePoolPriceInput,
   CreateUniswapV3PoolPriceInput,
 } from '../types/pool-price/pool-price-input.js';
-import type { UniswapV3PoolPrice } from '../../shared/types/uniswapv3/pool-price.js';
+import type { UniswapV3PoolPrice } from '@midcurve/shared';
 
 /**
  * Pool Price Fixture structure

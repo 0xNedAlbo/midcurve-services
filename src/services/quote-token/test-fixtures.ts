@@ -5,7 +5,7 @@
  */
 
 import type { UniswapV3QuoteTokenInput } from '../types/quote-token/quote-token-input.js';
-import type { UniswapV3QuoteTokenResult } from '../../shared/types/quote-token-result.js';
+import type { UniswapV3QuoteTokenResult } from '@midcurve/shared';
 import { SupportedChainId } from '../../config/evm.js';
 
 /**

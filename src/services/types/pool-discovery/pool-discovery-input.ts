@@ -8,7 +8,7 @@
  * The UI/API receives PoolDiscoveryResult objects with full data.
  */
 
-import type { PoolConfigMap } from '../../../shared/types/pool-config.js';
+import type { PoolConfigMap } from '@midcurve/shared';
 
 /**
  * Pool discovery input map

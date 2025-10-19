@@ -22,7 +22,7 @@ import type {
   UniswapV3LedgerEvent,
   UniswapV3LedgerEventConfig,
   UniswapV3LedgerEventState,
-} from '../../shared/types/uniswapv3/position-ledger-event.js';
+} from '@midcurve/shared';
 import type {
   CreateUniswapV3LedgerEventInput,
   UniswapV3EventDiscoverInput,
@@ -38,10 +38,10 @@ import type { RawPositionEvent } from '../../clients/etherscan/types.js';
 import { UniswapV3PositionService } from '../position/uniswapv3-position-service.js';
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { UniswapV3PoolPriceService } from '../pool-price/uniswapv3-pool-price-service.js';
-import type { UniswapV3Position } from '../../shared/types/uniswapv3/position.js';
-import type { UniswapV3Pool } from '../../shared/types/uniswapv3/pool.js';
-import type { Erc20Token } from '../../shared/types/token.js';
-import type { UniswapV3PoolPrice } from '../../shared/types/uniswapv3/pool-price.js';
+import type { UniswapV3Position } from '@midcurve/shared';
+import type { UniswapV3Pool } from '@midcurve/shared';
+import type { Erc20Token } from '@midcurve/shared';
+import type { UniswapV3PoolPrice } from '@midcurve/shared';
 import {
   calculatePoolPriceInQuoteToken,
   calculateTokenValueInQuote,

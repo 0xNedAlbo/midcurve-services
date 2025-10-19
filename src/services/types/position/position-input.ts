@@ -10,7 +10,7 @@
 import type {
   Position,
   PositionConfigMap,
-} from '../../../shared/types/position.js';
+} from '@midcurve/shared';
 
 /**
  * Uniswap V3 Position Discovery Input

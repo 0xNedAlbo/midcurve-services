@@ -10,7 +10,7 @@ import { uniswapV3PoolAbi } from './pool-abi.js';
 import type {
   UniswapV3PoolConfig,
   UniswapV3PoolState,
-} from '../../shared/types/uniswapv3/pool.js';
+} from '@midcurve/shared';
 
 /**
  * Error thrown when pool configuration cannot be read from contract

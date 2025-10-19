@@ -6,7 +6,7 @@
 import type {
   PositionLedgerEvent,
   PositionLedgerEventConfigMap,
-} from '../../../shared/types/position-ledger-event.js';
+} from '@midcurve/shared';
 
 /**
  * Input type for creating a new position ledger event

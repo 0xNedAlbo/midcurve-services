@@ -10,7 +10,7 @@ import type {
   UniswapV3PoolConfig,
   UniswapV3PoolState,
   UniswapV3Pool,
-} from '../../shared/types/uniswapv3/pool.js';
+} from '@midcurve/shared';
 import type {
   UniswapV3PoolDiscoverInput,
   CreatePoolInput,
@@ -25,7 +25,7 @@ import { PoolService } from './pool-service.js';
 import {
   isValidAddress,
   normalizeAddress,
-} from '../../utils/evm/index.js';
+} from '@midcurve/shared';
 import {
   readPoolConfig,
   readPoolState,
@@ -34,7 +34,7 @@ import {
 import { EvmConfig } from '../../config/evm.js';
 import { Erc20TokenService } from '../token/erc20-token-service.js';
 import { log } from '../../logging/index.js';
-import type { Erc20Token } from '../../shared/types/token.js';
+import type { Erc20Token } from '@midcurve/shared';
 
 /**
  * Dependencies for UniswapV3PoolService
