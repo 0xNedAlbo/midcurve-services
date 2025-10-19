@@ -60,6 +60,12 @@ export type {
   UniswapV3QuoteTokenResult,
 } from './quote-token-result.js';
 
+// Pool Discovery Result types
+export type {
+  PoolDiscoveryResult,
+  UniswapV3PoolDiscoveryResult,
+} from './pool-discovery-result.js';
+
 // Uniswap V3 types (protocol-specific)
 export type {
   UniswapV3PoolConfig,

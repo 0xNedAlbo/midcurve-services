@@ -92,3 +92,10 @@ export type {
   QuoteTokenInputMap,
   UniswapV3QuoteTokenInput,
 } from './quote-token/index.js';
+
+// Pool Discovery input types
+export type {
+  PoolDiscoveryInputMap,
+  PoolDiscoveryInput,
+  UniswapV3PoolDiscoveryInput,
+} from './pool-discovery/index.js';
