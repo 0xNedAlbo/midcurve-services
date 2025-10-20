@@ -70,3 +70,82 @@ export type TokenDiscoverInput<T extends keyof TokenConfigMap> =
  * Extend this as new token types are added
  */
 export type AnyTokenDiscoverInput = TokenDiscoverInput<keyof TokenConfigMap>;
+
+// =============================================================================
+// SEARCH TYPES
+// =============================================================================
+
+/**
+ * Input for searching ERC-20 tokens in CoinGecko
+ */
+export interface Erc20TokenSearchInput {
+    /** EVM chain ID where tokens should exist */
+    chainId: number;
+    /** Optional partial symbol match (case-insensitive) */
+    symbol?: string;
+    /** Optional partial name match (case-insensitive) */
+    name?: string;
+    /** Optional contract address to search for (case-insensitive, will be normalized) */
+    address?: string;
+}
+
+/**
+ * Search result candidate for ERC-20 tokens from CoinGecko
+ * Not a full Token object - missing id, decimals, timestamps (not in database yet)
+ */
+export interface Erc20TokenSearchCandidate {
+    /** CoinGecko coin ID */
+    coingeckoId: string;
+    /** Token symbol (uppercase) */
+    symbol: string;
+    /** Token name */
+    name: string;
+    /** Contract address on the specified chain */
+    address: string;
+    /** EVM chain ID where this token exists */
+    chainId: number;
+}
+
+/**
+ * Mapped type for token search inputs
+ * Maps each token type to its search input type
+ */
+export interface TokenSearchInputMap {
+    erc20: Erc20TokenSearchInput;
+    // Future: solana: SolanaTokenSearchInput, etc.
+}
+
+/**
+ * Mapped type for token search candidates
+ * Maps each token type to its search candidate type
+ */
+export interface TokenSearchCandidateMap {
+    erc20: Erc20TokenSearchCandidate;
+    // Future: solana: SolanaTokenSearchCandidate, etc.
+}
+
+/**
+ * Generic search input type
+ * Uses mapped type to ensure type safety
+ *
+ * @template T - Token type key from TokenConfigMap ('erc20', etc.)
+ */
+export type TokenSearchInput<T extends keyof TokenConfigMap> = TokenSearchInputMap[T];
+
+/**
+ * Generic search candidate type
+ * Uses mapped type to ensure type safety
+ *
+ * @template T - Token type key from TokenConfigMap ('erc20', etc.)
+ */
+export type TokenSearchCandidate<T extends keyof TokenConfigMap> = TokenSearchCandidateMap[T];
+
+/**
+ * Union type for any token search input
+ */
+export type AnyTokenSearchInput = TokenSearchInput<keyof TokenConfigMap>;
+
+/**
+ * Union type for any token search candidate
+ */
+export type AnyTokenSearchCandidate = TokenSearchCandidate<keyof TokenConfigMap>;

@@ -29,6 +29,7 @@ describe('Erc20TokenService', () => {
     publicClientMock = mockDeep<PublicClient>();
     coinGeckoClientMock = {
       getErc20EnrichmentData: vi.fn(),
+      searchTokens: vi.fn(),
     };
 
     service = new Erc20TokenService({
@@ -1898,293 +1899,250 @@ describe('Erc20TokenService', () => {
   });
 
   // ==========================================================================
-  // Search Tests
+  // Search Tests (Two-Tier: DB + CoinGecko)
   // ==========================================================================
 
   describe('searchTokens', () => {
     const chainId = 1; // Ethereum
 
-    const mockTokens = [
-      {
-        id: '1',
-        createdAt: new Date('2024-01-01'),
-        updatedAt: new Date('2024-01-01'),
-        tokenType: 'erc20',
-        name: 'USD Coin',
-        symbol: 'USDC',
-        decimals: 6,
-        logoUrl: 'https://...',
-        coingeckoId: 'usd-coin',
-        marketCap: 32000000000,
-        config: {
-          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-          chainId: 1,
-        },
+    // Mock database tokens
+    const mockDbToken1 = {
+      id: '1',
+      createdAt: new Date('2024-01-01'),
+      updatedAt: new Date('2024-01-01'),
+      tokenType: 'erc20',
+      name: 'USD Coin',
+      symbol: 'USDC',
+      decimals: 6,
+      logoUrl: 'https://...',
+      coingeckoId: 'usd-coin',
+      marketCap: 32000000000,
+      config: {
+        address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        chainId: 1,
       },
-      {
-        id: '2',
-        createdAt: new Date('2024-01-02'),
-        updatedAt: new Date('2024-01-02'),
-        tokenType: 'erc20',
-        name: 'Tether USD',
-        symbol: 'USDT',
-        decimals: 6,
-        logoUrl: 'https://...',
-        coingeckoId: 'tether',
-        marketCap: 95000000000,
-        config: {
-          address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-          chainId: 1,
-        },
+    };
+
+    const mockDbToken2 = {
+      id: '2',
+      createdAt: new Date('2024-01-02'),
+      updatedAt: new Date('2024-01-02'),
+      tokenType: 'erc20',
+      name: 'Tether USD',
+      symbol: 'USDT',
+      decimals: 6,
+      logoUrl: 'https://...',
+      coingeckoId: 'tether',
+      marketCap: 95000000000,
+      config: {
+        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        chainId: 1,
       },
-      {
-        id: '3',
-        createdAt: new Date('2024-01-03'),
-        updatedAt: new Date('2024-01-03'),
-        tokenType: 'erc20',
-        name: 'Wrapped Ether',
-        symbol: 'WETH',
-        decimals: 18,
-        logoUrl: 'https://...',
-        coingeckoId: 'weth',
-        marketCap: 12000000000,
-        config: {
-          address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-          chainId: 1,
-        },
+    };
+
+    const mockDbToken3 = {
+      id: '3',
+      createdAt: new Date('2024-01-03'),
+      updatedAt: new Date('2024-01-03'),
+      tokenType: 'erc20',
+      name: 'Wrapped Ether',
+      symbol: 'WETH',
+      decimals: 18,
+      logoUrl: 'https://...',
+      coingeckoId: 'weth',
+      marketCap: 12000000000,
+      config: {
+        address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        chainId: 1,
       },
-    ];
+    };
 
-    describe('successful search', () => {
-      it('should search by symbol only', async () => {
-        const usdTokens = [mockTokens[0], mockTokens[1]]; // USDC, USDT
+    // Mock CoinGecko tokens (different addresses)
+    const mockCgToken1 = {
+      coingeckoId: 'dai',
+      symbol: 'DAI',
+      name: 'Dai Stablecoin',
+      address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+    };
 
-        prismaMock.token.findMany.mockResolvedValue(usdTokens);
+    const mockCgToken2 = {
+      coingeckoId: 'frax',
+      symbol: 'FRAX',
+      name: 'Frax',
+      address: '0x853d955aCEf822Db058eb8505911ED77F175b99e',
+    };
 
-        const result = await service.searchTokens({
-          chainId,
-          symbol: 'usd',
-        });
+    // Setup mocks before each search test
+    beforeEach(() => {
+      evmConfigMock.isChainSupported.mockReturnValue(true);
+      evmConfigMock.getSupportedChainIds.mockReturnValue([1, 42161, 8453]);
+    });
 
-        expect(result).toHaveLength(2);
-        expect(result[0].symbol).toBe('USDC');
-        expect(result[1].symbol).toBe('USDT');
-
-        // Verify query was built correctly
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
-          where: {
-            tokenType: 'erc20',
-            config: {
-              path: ['chainId'],
-              equals: 1,
-            },
-            symbol: {
-              contains: 'usd',
-              mode: 'insensitive',
-            },
-          },
-          orderBy: {
-            symbol: 'asc',
-          },
-          take: 10,
-        });
-      });
-
-      it('should search by name only', async () => {
-        const coinTokens = [mockTokens[0]]; // USD Coin
-
-        prismaMock.token.findMany.mockResolvedValue(coinTokens);
-
-        const result = await service.searchTokens({
-          chainId,
-          name: 'coin',
-        });
-
-        expect(result).toHaveLength(1);
-        expect(result[0].name).toBe('USD Coin');
-
-        // Verify query was built correctly
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
-          where: {
-            tokenType: 'erc20',
-            config: {
-              path: ['chainId'],
-              equals: 1,
-            },
-            name: {
-              contains: 'coin',
-              mode: 'insensitive',
-            },
-          },
-          orderBy: {
-            symbol: 'asc',
-          },
-          take: 10,
-        });
-      });
-
-      it('should search by both symbol and name', async () => {
-        const matchingTokens = [mockTokens[2]]; // Wrapped Ether
-
-        prismaMock.token.findMany.mockResolvedValue(matchingTokens);
-
-        const result = await service.searchTokens({
-          chainId,
-          symbol: 'eth',
-          name: 'wrapped',
-        });
-
-        expect(result).toHaveLength(1);
-        expect(result[0].symbol).toBe('WETH');
-        expect(result[0].name).toBe('Wrapped Ether');
-
-        // Verify both filters applied
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
-          where: {
-            tokenType: 'erc20',
-            config: {
-              path: ['chainId'],
-              equals: 1,
-            },
-            symbol: {
-              contains: 'eth',
-              mode: 'insensitive',
-            },
-            name: {
-              contains: 'wrapped',
-              mode: 'insensitive',
-            },
-          },
-          orderBy: {
-            symbol: 'asc',
-          },
-          take: 10,
-        });
-      });
-
-      it('should return max 10 results when more exist', async () => {
-        // Create 15 mock tokens
-        const manyTokens = Array.from({ length: 15 }, (_, i) => ({
-          ...mockTokens[0],
-          id: `token-${i}`,
+    describe('database-first priority', () => {
+      it('should return DB results ordered by market cap DESC when 10+ results', async () => {
+        // Return 10 DB results (no CoinGecko needed)
+        const tenTokens = Array.from({ length: 10 }, (_, i) => ({
+          ...mockDbToken1,
+          id: `db-${i}`,
           symbol: `TOKEN${i}`,
+          marketCap: 1000000 * (10 - i), // Descending market cap
+          config: { address: `0x${i.toString().padStart(40, '0')}`, chainId: 1 },
         }));
 
-        // Prisma will only return 10 due to take: 10
-        prismaMock.token.findMany.mockResolvedValue(manyTokens.slice(0, 10));
+        prismaMock.token.findMany.mockResolvedValue(tenTokens);
 
-        const result = await service.searchTokens({
-          chainId,
-          symbol: 'token',
-        });
+        const result = await service.searchTokens({ chainId, symbol: 'token' });
 
         expect(result).toHaveLength(10);
+        // Verify all results are from DB
+        expect(result.every((r) => r.coingeckoId === 'usd-coin')).toBe(true);
+        // Verify CoinGecko was NOT called
+        expect(coinGeckoClientMock.searchTokens).not.toHaveBeenCalled();
+        // Verify ordering by market cap
         expect(prismaMock.token.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            take: 10,
+            orderBy: [
+              { marketCap: { sort: 'desc', nulls: 'last' } },
+              { symbol: 'asc' },
+            ],
           })
         );
       });
 
-      it('should return results ordered alphabetically by symbol', async () => {
-        const unorderedTokens = [mockTokens[2], mockTokens[0], mockTokens[1]]; // WETH, USDC, USDT
+      it('should combine DB (< 10) + CoinGecko results, DB first', async () => {
+        // 2 DB results
+        prismaMock.token.findMany.mockResolvedValue([mockDbToken1, mockDbToken2]);
 
-        prismaMock.token.findMany.mockResolvedValue(unorderedTokens);
+        // 2 CoinGecko results
+        coinGeckoClientMock.searchTokens.mockResolvedValue([
+          mockCgToken1,
+          mockCgToken2,
+        ]);
 
-        await service.searchTokens({
-          chainId,
-          symbol: 'u',
+        const result = await service.searchTokens({ chainId, symbol: 'usd' });
+
+        expect(result).toHaveLength(4);
+        // First 2 are from DB (ordered by market cap: USDT > USDC)
+        expect(result[0].symbol).toBe('USDC');
+        expect(result[1].symbol).toBe('USDT');
+        // Next 2 are from CoinGecko
+        expect(result[2].symbol).toBe('DAI');
+        expect(result[3].symbol).toBe('FRAX');
+
+        // Verify CoinGecko was called with correct params
+        expect(coinGeckoClientMock.searchTokens).toHaveBeenCalledWith({
+          platform: 'ethereum',
+          symbol: 'usd',
+          name: undefined,
+          address: undefined,
         });
-
-        // Verify orderBy was specified
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
-          expect.objectContaining({
-            orderBy: {
-              symbol: 'asc',
-            },
-          })
-        );
-      });
-
-      it('should return empty array when no matches found', async () => {
-        prismaMock.token.findMany.mockResolvedValue([]);
-
-        const result = await service.searchTokens({
-          chainId,
-          symbol: 'nonexistent',
-        });
-
-        expect(result).toEqual([]);
-        expect(result).toHaveLength(0);
-      });
-
-      it('should perform case-insensitive search', async () => {
-        prismaMock.token.findMany.mockResolvedValue([mockTokens[0]]);
-
-        await service.searchTokens({
-          chainId,
-          symbol: 'UsDc', // Mixed case
-        });
-
-        // Verify case-insensitive mode was used
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
-          expect.objectContaining({
-            where: expect.objectContaining({
-              symbol: {
-                contains: 'UsDc',
-                mode: 'insensitive',
-              },
-            }),
-          })
-        );
-      });
-
-      it('should search within specific chain only', async () => {
-        prismaMock.token.findMany.mockResolvedValue([mockTokens[0]]);
-
-        await service.searchTokens({
-          chainId: 56, // BSC
-          symbol: 'usdc',
-        });
-
-        // Verify chainId filter
-        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
-          expect.objectContaining({
-            where: expect.objectContaining({
-              config: {
-                path: ['chainId'],
-                equals: 56,
-              },
-            }),
-          })
-        );
       });
     });
 
-    describe('validation errors', () => {
-      it('should throw error if neither symbol nor name provided', async () => {
-        await expect(
-          service.searchTokens({
-            chainId,
-          })
-        ).rejects.toThrow('At least one search parameter (symbol or name) must be provided');
+    describe('deduplication', () => {
+      it('should filter out CoinGecko tokens already in DB (case-insensitive)', async () => {
+        // 2 DB results
+        prismaMock.token.findMany.mockResolvedValue([mockDbToken1, mockDbToken2]);
 
-        // Should not query database
+        // CoinGecko returns USDC (duplicate) + DAI (unique)
+        coinGeckoClientMock.searchTokens.mockResolvedValue([
+          { ...mockCgToken1 },
+          {
+            coingeckoId: 'usd-coin-duplicate',
+            symbol: 'USDC',
+            name: 'USD Coin',
+            address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // Same as DB (different case)
+          },
+        ]);
+
+        const result = await service.searchTokens({ chainId, symbol: 'usd' });
+
+        expect(result).toHaveLength(3); // 2 DB + 1 CG (duplicate removed)
+        expect(result[0].symbol).toBe('USDC'); // From DB
+        expect(result[1].symbol).toBe('USDT'); // From DB
+        expect(result[2].symbol).toBe('DAI'); // From CG (unique)
+      });
+    });
+
+    describe('address search', () => {
+      it('should search by address only (exact match, case-insensitive)', async () => {
+        const usdcAddress = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'; // Lowercase
+
+        prismaMock.token.findMany.mockResolvedValue([mockDbToken1]);
+
+        // Mock CoinGecko (won't be called since DB returned 1 result, but need to handle if < 10)
+        coinGeckoClientMock.searchTokens.mockResolvedValue([]);
+
+        const result = await service.searchTokens({ chainId, address: usdcAddress });
+
+        expect(result).toHaveLength(1);
+        expect(result[0].symbol).toBe('USDC');
+
+        // Verify address was normalized and used in query
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              AND: {
+                config: {
+                  path: ['address'],
+                  equals: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // Checksummed
+                },
+              },
+            }),
+          })
+        );
+      });
+
+      it('should throw error for invalid address format', async () => {
+        await expect(
+          service.searchTokens({ chainId, address: 'invalid-address' })
+        ).rejects.toThrow('Invalid Ethereum address format');
+
         expect(prismaMock.token.findMany).not.toHaveBeenCalled();
       });
     });
 
-    describe('database errors', () => {
-      it('should propagate database errors', async () => {
-        const dbError = new Error('Database connection failed');
-        prismaMock.token.findMany.mockRejectedValue(dbError);
-
+    describe('validation', () => {
+      it('should throw error if no search parameters provided', async () => {
         await expect(
-          service.searchTokens({
-            chainId,
-            symbol: 'usdc',
-          })
-        ).rejects.toThrow('Database connection failed');
+          service.searchTokens({ chainId })
+        ).rejects.toThrow(
+          'At least one search parameter (symbol, name, or address) must be provided'
+        );
+
+        expect(prismaMock.token.findMany).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('max 10 results', () => {
+      it('should limit CoinGecko results to (10 - dbCount)', async () => {
+        // 3 DB results
+        prismaMock.token.findMany.mockResolvedValue([
+          mockDbToken1,
+          mockDbToken2,
+          mockDbToken3,
+        ]);
+
+        // 20 CoinGecko results
+        const twentyCgTokens = Array.from({ length: 20 }, (_, i) => ({
+          coingeckoId: `token-${i}`,
+          symbol: `TKN${i}`,
+          name: `Token ${i}`,
+          address: `0x${(i + 100).toString().padStart(40, '0')}`,
+        }));
+
+        coinGeckoClientMock.searchTokens.mockResolvedValue(twentyCgTokens);
+
+        const result = await service.searchTokens({ chainId, symbol: 'tk' });
+
+        expect(result).toHaveLength(10); // 3 DB + 7 CG (not 3 + 20)
+        // First 3 from DB
+        expect(result[0].symbol).toBe('USDC');
+        expect(result[1].symbol).toBe('USDT');
+        expect(result[2].symbol).toBe('WETH');
+        // Next 7 from CoinGecko
+        expect(result[3].symbol).toBe('TKN0');
+        expect(result[9].symbol).toBe('TKN6');
       });
     });
   });

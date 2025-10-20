@@ -742,4 +742,148 @@ export class CoinGeckoClient {
   isChainSupported(chainId: number): boolean {
     return chainId in this.chainIdToPlatformId;
   }
+
+  /**
+   * Search for tokens by symbol, name, and/or address on a specific platform (platform-agnostic)
+   *
+   * This method is platform-agnostic and works with CoinGecko platform IDs.
+   * It searches the cached token list and returns matching tokens.
+   *
+   * All provided search criteria are combined with AND logic - a token must match
+   * ALL specified parameters to be included in results.
+   *
+   * Platform IDs examples:
+   * - 'ethereum' (Ethereum mainnet)
+   * - 'arbitrum-one' (Arbitrum)
+   * - 'base' (Base)
+   * - 'binance-smart-chain' (BSC)
+   * - 'polygon-pos' (Polygon)
+   * - 'optimistic-ethereum' (Optimism)
+   * - 'solana' (Solana - future)
+   *
+   * @param params.platform - CoinGecko platform ID (e.g., 'ethereum', 'arbitrum-one')
+   * @param params.symbol - Optional partial symbol match (case-insensitive)
+   * @param params.name - Optional partial name match (case-insensitive)
+   * @param params.address - Optional contract address match (case-insensitive, normalized)
+   * @returns Array of matching tokens (max 10, sorted by symbol)
+   * @throws Error if no search parameters provided
+   * @throws CoinGeckoApiError if API request fails
+   *
+   * @example
+   * ```typescript
+   * const client = CoinGeckoClient.getInstance();
+   *
+   * // Search for tokens with "usd" in symbol on Ethereum
+   * const results = await client.searchTokens({
+   *   platform: 'ethereum',
+   *   symbol: 'usd'
+   * });
+   * // Returns: [{ coingeckoId: 'usd-coin', symbol: 'USDC', name: 'USD Coin', address: '0x...' }, ...]
+   *
+   * // Search by exact address
+   * const byAddress = await client.searchTokens({
+   *   platform: 'ethereum',
+   *   address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+   * });
+   * // Returns: [{ coingeckoId: 'usd-coin', ... }]
+   * ```
+   */
+  async searchTokens(params: {
+    platform: string;
+    symbol?: string;
+    name?: string;
+    address?: string;
+  }): Promise<Array<{ coingeckoId: string; symbol: string; name: string; address: string }>> {
+    const { platform, symbol, name, address } = params;
+    log.methodEntry(this.logger, 'searchTokens', { platform, symbol, name, address });
+
+    try {
+      // Validate at least one search term provided
+      if (!symbol && !name && !address) {
+        const error = new Error(
+          'At least one search parameter (symbol, name, or address) must be provided'
+        );
+        log.methodError(this.logger, 'searchTokens', error, { platform });
+        throw error;
+      }
+
+      // Get all tokens (uses distributed cache)
+      const allTokens = await this.getAllTokens();
+
+      // Filter by platform and search criteria
+      const normalizedSymbol = symbol?.toLowerCase();
+      const normalizedName = name?.toLowerCase();
+      const normalizedAddress = address?.toLowerCase();
+
+      const matchingTokens = allTokens
+        .filter((token) => {
+          // Must have address on specified platform
+          const tokenAddress = token.platforms[platform];
+          if (!tokenAddress || tokenAddress.trim() === '') {
+            return false;
+          }
+
+          // Match address if provided (case-insensitive exact match)
+          if (normalizedAddress) {
+            const tokenAddressLower = tokenAddress.toLowerCase();
+            if (tokenAddressLower !== normalizedAddress) {
+              return false;
+            }
+          }
+
+          // Match symbol if provided (substring match)
+          if (normalizedSymbol) {
+            const tokenSymbol = token.symbol.toLowerCase();
+            if (!tokenSymbol.includes(normalizedSymbol)) {
+              return false;
+            }
+          }
+
+          // Match name if provided (substring match)
+          if (normalizedName) {
+            const tokenName = token.name.toLowerCase();
+            if (!tokenName.includes(normalizedName)) {
+              return false;
+            }
+          }
+
+          return true;
+        })
+        .slice(0, 10) // Limit to 10 results
+        .sort((a, b) => a.symbol.localeCompare(b.symbol)) // Sort alphabetically by symbol
+        .map((token) => ({
+          coingeckoId: token.id,
+          symbol: token.symbol.toUpperCase(),
+          name: token.name,
+          address: token.platforms[platform]!, // Safe to assert non-null due to filter above
+        }));
+
+      this.logger.info(
+        { platform, symbol, name, address, count: matchingTokens.length },
+        'Token search completed'
+      );
+
+      log.methodExit(this.logger, 'searchTokens', {
+        count: matchingTokens.length,
+      });
+
+      return matchingTokens;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          error.message.includes('At least one search parameter')
+        )
+      ) {
+        log.methodError(this.logger, 'searchTokens', error as Error, {
+          platform,
+          symbol,
+          name,
+          address,
+        });
+      }
+      throw error;
+    }
+  }
 }

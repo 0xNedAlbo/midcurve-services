@@ -13,6 +13,8 @@ import type {
     CreateTokenInput,
     UpdateTokenInput,
     Erc20TokenDiscoverInput,
+    Erc20TokenSearchInput,
+    Erc20TokenSearchCandidate,
 } from "../types/token/token-input.js";
 import { TokenService } from "./token-service.js";
 import {
@@ -830,36 +832,101 @@ export class Erc20TokenService extends TokenService<"erc20"> {
     // ============================================================================
 
     /**
-     * Search for ERC-20 tokens by symbol and/or name within a specific chain
+     * Search for ERC-20 tokens by symbol and/or name within a specific chain using CoinGecko
+     *
+     * This method searches CoinGecko's token catalog (NOT the local database).
+     * Results are tokens that match the search criteria and are available on the specified chain.
      *
      * Returns up to 10 matching tokens, ordered alphabetically by symbol.
      * Users should provide more specific search terms if they need fewer results.
      *
-     * @param params.chainId - Chain ID (REQUIRED)
-     * @param params.symbol - Partial symbol match (optional, case-insensitive)
-     * @param params.name - Partial name match (optional, case-insensitive)
-     * @returns Array of matching tokens (max 10)
+     * To add a token to the database, use the discover() method with the address from search results.
+     *
+     * @param input.chainId - EVM chain ID (REQUIRED)
+     * @param input.symbol - Partial symbol match (optional, case-insensitive)
+     * @param input.name - Partial name match (optional, case-insensitive)
+     * @returns Array of matching token candidates from CoinGecko (max 10)
      * @throws Error if neither symbol nor name provided
+     * @throws Error if chain ID is not supported
+     * @throws CoinGeckoApiError if CoinGecko API request fails
+     *
+     * @example
+     * ```typescript
+     * const service = new Erc20TokenService();
+     *
+     * // Search for tokens with "usd" in symbol on Ethereum
+     * const candidates = await service.searchTokens({
+     *   chainId: 1,
+     *   symbol: 'usd'
+     * });
+     * // Returns: [{ coingeckoId: 'usd-coin', symbol: 'USDC', name: 'USD Coin', address: '0x...', chainId: 1 }, ...]
+     *
+     * // To add to database, call discover() with the address
+     * const token = await service.discover({
+     *   address: candidates[0].address,
+     *   chainId: candidates[0].chainId
+     * });
+     * ```
      */
-    async searchTokens(params: {
-        chainId: number;
-        symbol?: string;
-        name?: string;
-    }): Promise<Token<"erc20">[]> {
-        const { chainId, symbol, name } = params;
-        log.methodEntry(this.logger, "searchTokens", { chainId, symbol, name });
+    override async searchTokens(
+        input: Erc20TokenSearchInput
+    ): Promise<Erc20TokenSearchCandidate[]> {
+        const { chainId, symbol, name, address } = input;
+        log.methodEntry(this.logger, "searchTokens", { chainId, symbol, name, address });
 
         try {
             // Validate at least one search term provided
-            if (!symbol && !name) {
+            if (!symbol && !name && !address) {
                 const error = new Error(
-                    "At least one search parameter (symbol or name) must be provided"
+                    "At least one search parameter (symbol, name, or address) must be provided"
                 );
                 log.methodError(this.logger, "searchTokens", error, { chainId });
                 throw error;
             }
 
-            // Build where clause
+            // Validate and normalize address if provided
+            let normalizedAddress: string | undefined;
+            if (address) {
+                if (!isValidAddress(address)) {
+                    const error = new Error(`Invalid Ethereum address format: ${address}`);
+                    log.methodError(this.logger, "searchTokens", error, { chainId, address });
+                    throw error;
+                }
+                normalizedAddress = normalizeAddress(address);
+                this.logger.debug(
+                    { original: address, normalized: normalizedAddress },
+                    "Address normalized for search"
+                );
+            }
+
+            // Verify chain is supported
+            if (!this.evmConfig.isChainSupported(chainId)) {
+                const error = new Error(
+                    `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+                        .getSupportedChainIds()
+                        .join(", ")}`
+                );
+                log.methodError(this.logger, "searchTokens", error, { chainId });
+                throw error;
+            }
+
+            // Get platform ID for this chain
+            const platformId = this.getPlatformId(chainId);
+            if (!platformId) {
+                const error = new Error(
+                    `No CoinGecko platform mapping for chain ${chainId}`
+                );
+                log.methodError(this.logger, "searchTokens", error, { chainId });
+                throw error;
+            }
+
+            // 1. Search database first for existing tokens
+            this.logger.debug(
+                { chainId, symbol, name, address: normalizedAddress },
+                "Searching database for tokens"
+            );
+
+            // Build database query where clause
             const where: any = {
                 tokenType: "erc20",
                 config: {
@@ -884,55 +951,171 @@ export class Erc20TokenService extends TokenService<"erc20"> {
                 };
             }
 
-            this.logger.debug(
-                { chainId, symbol, name },
-                "Searching tokens with filters"
-            );
+            // Add address filter if provided
+            if (normalizedAddress) {
+                where.AND = {
+                    config: {
+                        path: ["address"],
+                        equals: normalizedAddress,
+                    },
+                };
+            }
 
             log.dbOperation(this.logger, "findMany", "Token", {
                 chainId,
                 symbol,
                 name,
+                address: normalizedAddress,
                 limit: 10,
             });
 
-            // Execute query
-            const results = await this.prisma.token.findMany({
+            // Execute database query with ordering
+            const dbTokens = await this.prisma.token.findMany({
                 where,
-                orderBy: {
-                    symbol: "asc",
-                },
-                take: 10,
+                orderBy: [
+                    { marketCap: { sort: "desc", nulls: "last" } }, // High mcap first
+                    { symbol: "asc" }, // Then alphabetically
+                ],
+                take: 10, // Max 10 from DB
             });
 
-            // Map to Token<'erc20'>[]
-            const tokens = results.map((result) => this.mapToToken(result));
+            // Convert database tokens to search candidate format
+            const dbCandidates: Erc20TokenSearchCandidate[] = dbTokens.map((token) => {
+                const config = token.config as { address: string; chainId: number };
+                return {
+                    coingeckoId: token.coingeckoId || "", // Empty string if not enriched
+                    symbol: token.symbol,
+                    name: token.name,
+                    address: config.address,
+                    chainId: config.chainId,
+                };
+            });
 
             this.logger.info(
-                { chainId, symbol, name, count: tokens.length },
-                "Token search completed"
+                { chainId, symbol, name, address: normalizedAddress, dbCount: dbCandidates.length },
+                "Database search completed"
+            );
+
+            // 2. If we have less than 10 DB results, search CoinGecko for more
+            let coinGeckoToAdd: Erc20TokenSearchCandidate[] = [];
+
+            if (dbCandidates.length < 10) {
+                this.logger.debug(
+                    { chainId, platformId, symbol, name, address: normalizedAddress },
+                    "Searching CoinGecko for additional tokens"
+                );
+
+                // Search CoinGecko (platform-agnostic method)
+                const coinGeckoResults = await this.coinGeckoClient.searchTokens({
+                    platform: platformId,
+                    symbol,
+                    name,
+                    address: normalizedAddress,
+                });
+
+                // Create set of addresses already in DB (normalized, lowercase for comparison)
+                const dbAddresses = new Set(
+                    dbCandidates.map((c) => c.address.toLowerCase())
+                );
+
+                // Filter out tokens already in DB
+                const uniqueCoinGeckoResults = coinGeckoResults.filter(
+                    (cgToken) => !dbAddresses.has(cgToken.address.toLowerCase())
+                );
+
+                // Calculate how many CoinGecko tokens to add
+                const remainingSlots = 10 - dbCandidates.length;
+
+                // Take only what we need from CoinGecko (already sorted alphabetically)
+                const coinGeckoFiltered = uniqueCoinGeckoResults.slice(0, remainingSlots);
+
+                // Transform to ERC-20 format (add chainId to results)
+                coinGeckoToAdd = coinGeckoFiltered.map((result) => ({
+                    coingeckoId: result.coingeckoId,
+                    symbol: result.symbol,
+                    name: result.name,
+                    address: result.address,
+                    chainId, // Add chainId from input
+                }));
+
+                this.logger.info(
+                    {
+                        chainId,
+                        platformId,
+                        coinGeckoTotal: coinGeckoResults.length,
+                        coinGeckoUnique: uniqueCoinGeckoResults.length,
+                        coinGeckoAdded: coinGeckoToAdd.length,
+                    },
+                    "CoinGecko search completed"
+                );
+            } else {
+                this.logger.debug(
+                    { dbCount: dbCandidates.length },
+                    "Skipping CoinGecko search (DB has 10+ results)"
+                );
+            }
+
+            // 3. Combine results: DB first (ordered by mcap), then CoinGecko (alphabetically)
+            const candidates: Erc20TokenSearchCandidate[] = [
+                ...dbCandidates,
+                ...coinGeckoToAdd,
+            ];
+
+            this.logger.info(
+                {
+                    chainId,
+                    symbol,
+                    name,
+                    address: normalizedAddress,
+                    dbCount: dbCandidates.length,
+                    coinGeckoCount: coinGeckoToAdd.length,
+                    totalCount: candidates.length,
+                },
+                "Token search completed (DB + CoinGecko)"
             );
 
             log.methodExit(this.logger, "searchTokens", {
-                count: tokens.length,
+                count: candidates.length,
             });
 
-            return tokens;
+            return candidates;
         } catch (error) {
             // Only log if not already logged
             if (
                 !(
                     error instanceof Error &&
-                    error.message.includes("At least one search parameter")
+                    (error.message.includes("At least one search parameter") ||
+                        error.message.includes("not configured") ||
+                        error.message.includes("No CoinGecko platform mapping") ||
+                        error.message.includes("Invalid Ethereum address"))
                 )
             ) {
                 log.methodError(this.logger, "searchTokens", error as Error, {
                     chainId,
                     symbol,
                     name,
+                    address,
                 });
             }
             throw error;
         }
+    }
+
+    /**
+     * Get CoinGecko platform ID for an EVM chain ID
+     *
+     * @param chainId - EVM chain ID
+     * @returns CoinGecko platform ID or null if not supported
+     */
+    private getPlatformId(chainId: number): string | null {
+        const mapping: Record<number, string> = {
+            1: "ethereum", // Ethereum
+            42161: "arbitrum-one", // Arbitrum One
+            8453: "base", // Base
+            56: "binance-smart-chain", // BNB Smart Chain
+            137: "polygon-pos", // Polygon
+            10: "optimistic-ethereum", // Optimism
+        };
+        return mapping[chainId] || null;
     }
 }

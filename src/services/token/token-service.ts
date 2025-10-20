@@ -17,6 +17,8 @@ import type {
   CreateTokenInput,
   UpdateTokenInput,
   TokenDiscoverInput,
+  TokenSearchInput,
+  TokenSearchCandidate,
 } from '../types/token/token-input.js';
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
@@ -127,6 +129,29 @@ export abstract class TokenService<T extends keyof TokenConfigMap> {
    * @throws Error if discovery fails (protocol-specific errors)
    */
   abstract discover(params: TokenDiscoverInput<T>): Promise<Token<T>>;
+
+  // ============================================================================
+  // ABSTRACT SEARCH METHOD
+  // Protocol implementations MUST implement this method
+  // ============================================================================
+
+  /**
+   * Search for tokens in external catalogs (e.g., CoinGecko) by criteria
+   *
+   * Searches external data sources for tokens matching the specified criteria.
+   * Returns lightweight candidate objects (not full Token objects from database).
+   *
+   * Implementation note: Each protocol defines its own search input type
+   * via TokenSearchInputMap. For example, ERC-20 uses { chainId: number, symbol?: string, name?: string }.
+   *
+   * The search results are candidates that can be discovered/added to the database
+   * using the discover() method.
+   *
+   * @param input - Search parameters (type-safe via TokenSearchInputMap[T])
+   * @returns Array of matching token candidates (max 10)
+   * @throws Error if search fails (protocol-specific errors)
+   */
+  abstract searchTokens(input: TokenSearchInput<T>): Promise<TokenSearchCandidate<T>[]>;
 
   // ============================================================================
   // PROTECTED HELPERS
