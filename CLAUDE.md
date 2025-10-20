@@ -1,390 +1,90 @@
 # Midcurve Services
 
+> **Business logic layer for Midcurve Finance** - Core services, database operations, and on-chain data reading
+
+## Quick Navigation
+
+📚 **Architecture & Concepts:** [Monorepo CLAUDE.md](../CLAUDE.md)
+- Ecosystem overview, package roles, core architecture principles, project philosophy
+
+🌐 **API Layer:** [API CLAUDE.md](../midcurve-api/CLAUDE.md)
+- REST endpoints, request validation, response formatting
+
+📦 **Shared Types:** [Shared README.md](../midcurve-shared/README.md)
+- Type definitions, utilities, math functions
+
+---
+
 ## Project Overview
 
-**Midcurve Services** is a shared TypeScript library that implements the core business logic for **Midcurve Finance**, a comprehensive risk management platform for concentrated liquidity (CL) provisioning across multiple blockchain ecosystems.
+**Midcurve Services** is a shared TypeScript library that implements the core business logic for **Midcurve Finance**. This repository serves as the **single source of truth** for business logic, service layers, and database operations.
 
-This repository serves as the **single source of truth** for business logic, type definitions, and service layers that power the entire Midcurve Finance product suite.
+### Role in the Ecosystem
 
-## Role Within Midcurve Finance Product Suite
+The Services layer provides:
+- Business logic and CRUD operations (requires Prisma)
+- Database schema definition (Prisma models)
+- External API clients (CoinGecko, with distributed caching)
+- Service-specific utilities (ERC-20 readers, APR calculations)
+- Distributed caching (PostgreSQL-based)
 
-Midcurve Services acts as the **foundational layer** that is consumed by:
+**Consumed by:** API, Workers, Background processors
 
-### 1. **API Project** (Next.js on Vercel)
-- RESTful/GraphQL endpoints for frontend consumption
-- Serverless functions for efficient, scalable API operations
-- Real-time position monitoring and risk calculations
-- User authentication and authorization
+For complete ecosystem architecture and package responsibilities, see:
+**[Package Roles & Responsibilities](../CLAUDE.md#package-roles--responsibilities)**
 
-### 2. **UI/Frontend Application**
-- React/Next.js web application
-- Dashboard for monitoring CL positions
-- Risk analytics and visualizations
-- Portfolio management interface
+---
 
-### 3. **Workers/Background Processors**
-- Long-running job processors (Node.js)
-- Automated rebalancing execution
-- Price monitoring and alert triggers
-- Historical data aggregation
-- Notification services
+## Architecture Overview
 
-### Architecture Benefits
+For comprehensive architectural documentation, see the [monorepo CLAUDE.md](../CLAUDE.md):
 
-```
-┌──────────────────────────────────────────────────────┐
-│            Midcurve Finance Ecosystem                │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│  ┌─────────┐  ┌──────────┐  ┌──────────────┐       │
-│  │   API   │  │    UI    │  │   Workers    │       │
-│  │ (Vercel)│  │ (Next.js)│  │  (Node.js)   │       │
-│  └────┬────┘  └─────┬────┘  └──────┬───────┘       │
-│       │             │               │               │
-│       │             └───────┬───────┘               │
-│       │                     │                       │
-│       │            ┌────────▼─────────┐             │
-│       │            │ @midcurve/shared │             │
-│       │            │ Types + Utils    │             │
-│       │            └────────┬─────────┘             │
-│       │                     │                       │
-│       └─────────────────────┘                       │
-│                     │                               │
-│            ┌────────▼─────────┐                     │
-│            │ Midcurve Services│                     │
-│            │  (This Project)  │                     │
-│            │  Business Logic  │                     │
-│            └──────────────────┘                     │
-│                     │                               │
-│            ┌────────▼─────────┐                     │
-│            │    PostgreSQL     │                     │
-│            │   (Prisma ORM)    │                     │
-│            └──────────────────┘                     │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
+- **[Monorepo Architecture](../CLAUDE.md#monorepo-architecture)** - Ecosystem diagram
+- **[Type Hierarchy](../CLAUDE.md#1-type-hierarchy--separation-of-concerns)** - Why types come from @midcurve/shared
+- **[Prisma Schema Management](../CLAUDE.md#2-prisma-schema-management--peer-dependencies)** - Peer dependency pattern
+- **[Multi-Platform Abstraction](../CLAUDE.md#4-abstraction-strategy-for-multi-platform-support)** - Generic interfaces + platform configs
+- **[PostgreSQL Caching Rationale](../CLAUDE.md#5-distributed-caching-with-postgresql)** - Why PostgreSQL not Redis
+- **[Project Philosophy](../CLAUDE.md#project-philosophy--risk-management-approach)** - Quote/base tokens, risk definition
+- **[Supported Platforms](../CLAUDE.md#supported-platforms)** - EVM chains, Solana (future)
+- **[Code Style & Best Practices](../CLAUDE.md#code-style--best-practices)** - Monorepo-wide standards
 
-**Key Advantages:**
-- ✅ **Consistency**: Same business logic across all applications
-- ✅ **Type Safety**: Shared TypeScript types ensure compile-time safety
-- ✅ **Maintainability**: Single codebase for critical business logic
-- ✅ **Testability**: Business logic tested independently of applications
-- ✅ **Reusability**: Write once, use everywhere (API, UI, Workers)
+### Services-Specific Architecture Notes
 
-## Supported Platforms
+**Prisma Client as Peer Dependency:**
+This package declares `@prisma/client` as a **peer dependency**. Consuming projects (API, workers) install Prisma directly, and services uses their instance. This ensures a single Prisma client across the application.
 
-Midcurve Finance provides risk management for concentrated liquidity positions across multiple DEX protocols:
+**Type Imports:**
+Always import domain types from `@midcurve/shared`:
 
-### Ethereum Ecosystem
-- **Uniswap V3** - The original concentrated liquidity AMM on Ethereum mainnet
-
-### Binance Smart Chain (BSC)
-- **PancakeSwap V3** - Leading DEX on BSC with concentrated liquidity
-
-### Solana Ecosystem
-- **Orca** - User-friendly concentrated liquidity pools
-- **Raydium** - High-performance AMM with CL support
-
-## The Abstraction Approach
-
-### Philosophy
-
-Different blockchain platforms have fundamentally different architectures:
-- **EVM chains** (Ethereum, BSC): Contract addresses, ERC-20 tokens, gas fees
-- **Solana**: Program IDs, SPL tokens, accounts, rent-exempt balances
-
-Rather than creating separate implementations for each platform, Midcurve Services uses an **abstract interface pattern** that:
-1. Defines **common fields** shared across all platforms
-2. Stores **platform-specific data** in a flexible `config` field
-3. Provides **type safety** through TypeScript generics
-
-### Design Pattern
-
-#### Core Abstraction Principles
-
-**Common Fields**: Fields that exist across all platforms
 ```typescript
-interface Token<TConfig> {
-  // Database-generated fields
-  id: string;
-  createdAt: Date;
-  updatedAt: Date;
+// ✅ Correct
+import type { Token, Erc20Token } from '@midcurve/shared';
 
-  // Discriminated union for type narrowing
-  tokenType: 'evm-erc20' | 'solana-spl';
-
-  // Universal across all chains
-  name: string;
-  symbol: string;
-  decimals: number;
-  logoUrl?: string;
-  coingeckoId?: string;
-  marketCap?: number;
-
-  // Platform-specific (type-safe!)
-  config: TConfig;
-}
+// ❌ Wrong
+import type { Token } from '@prisma/client';
 ```
-
-**Platform-Specific Config**: Strongly-typed configuration objects
-```typescript
-// ERC-20 tokens (Ethereum, BSC, Arbitrum, Base, etc.)
-interface Erc20TokenConfig {
-  address: string;  // 0x... (EIP-55 checksummed)
-  chainId: number;  // 1 (Ethereum), 56 (BSC), 42161 (Arbitrum), etc.
-}
-
-// Solana SPL tokens
-interface SolanaTokenConfig {
-  mint: string;      // Base58 pubkey
-  programId?: string; // Usually SPL Token Program
-}
-
-// Union type for any token
-type TokenConfig = Erc20TokenConfig | SolanaTokenConfig;
-```
-
-**Type-Safe Usage with Discriminated Unions**:
-```typescript
-const usdcEth: Erc20Token = {
-  id: 'token_001',
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  tokenType: 'evm-erc20',  // Discriminator
-  name: "USD Coin",
-  symbol: "USDC",
-  decimals: 6,
-  config: {
-    address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-    chainId: 1
-  }
-};
-
-const usdcSol: SolanaToken = {
-  id: 'token_002',
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  tokenType: 'solana-spl',  // Discriminator
-  name: "USD Coin",
-  symbol: "USDC",
-  decimals: 6,
-  config: {
-    mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-    programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
-  }
-};
-
-// Type narrowing with discriminated unions
-function processToken(token: AnyToken) {
-  if (token.tokenType === 'evm-erc20') {
-    // TypeScript knows token.config is Erc20TokenConfig
-    console.log(`ERC-20 on chain ${token.config.chainId}`);
-  } else {
-    // TypeScript knows token.config is SolanaTokenConfig
-    console.log(`SPL token: ${token.config.mint}`);
-  }
-}
-```
-
-### Database Strategy
-
-The `config` field is persisted as a **PostgreSQL JSON column**:
-
-```prisma
-model Token {
-  id          String   @id @default(cuid())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tokenType   String   // 'evm-erc20' or 'solana-spl'
-  name        String
-  symbol      String
-  decimals    Int
-
-  // Optional fields
-  logoUrl     String?
-  coingeckoId String?
-  marketCap   Float?
-
-  // Platform-specific config (JSON)
-  config      Json
-
-  // Relations
-  poolsAsToken0 Pool[] @relation("PoolToken0")
-  poolsAsToken1 Pool[] @relation("PoolToken1")
-
-  // Indexes for efficient queries
-  @@index([tokenType])
-  @@index([symbol])
-  @@index([coingeckoId])
-}
-
-model Pool {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  protocol  String   // 'uniswapv3', etc.
-  poolType  String   // 'CL_TICKS'
-  token0Id  String
-  token1Id  String
-  feeBps    Int      // Fee in basis points
-
-  config    Json     // Pool-specific config (immutable)
-  state     Json     // Pool state (mutable, updated frequently)
-
-  // Relations
-  token0    Token    @relation("PoolToken0", fields: [token0Id], references: [id])
-  token1    Token    @relation("PoolToken1", fields: [token1Id], references: [id])
-
-  @@index([protocol])
-  @@index([poolType])
-  @@index([token0Id])
-  @@index([token1Id])
-}
-```
-
-**Benefits:**
-- ✅ **Schema flexibility**: Add new platforms without database migrations
-- ✅ **Query capability**: PostgreSQL JSON operators allow efficient queries
-- ✅ **Type safety**: TypeScript ensures correctness at compile time
-- ✅ **Performance**: JSON fields are indexed and performant in Postgres
-- ✅ **Future-proof**: Easy to add new chains (Arbitrum, Polygon, etc.)
 
 **BigInt Handling:**
-For numeric values that exceed JavaScript's `Number.MAX_SAFE_INTEGER` (like Uniswap V3's sqrtPriceX96):
-- **TypeScript**: Use native `bigint` type
-- **Database**: Store as `string` in JSON fields
-- **Conversion**: Service layer handles `bigint` ↔ `string` conversion
+For values exceeding `Number.MAX_SAFE_INTEGER`:
+- TypeScript: Use native `bigint`
+- Database: Store as `string` in JSON fields
+- Service layer handles conversion
 
-Example:
 ```typescript
-// TypeScript type
+// TypeScript
 interface UniswapV3PoolState {
   sqrtPriceX96: bigint;
   liquidity: bigint;
-  currentTick: number;
 }
 
-// Database serialization
+// Database
 interface UniswapV3PoolStateDB {
   sqrtPriceX96: string;  // "1234567890123456789"
   liquidity: string;
-  currentTick: number;
-}
-
-// Conversion functions in service layer
-function toPoolState(db: UniswapV3PoolStateDB): UniswapV3PoolState {
-  return {
-    sqrtPriceX96: BigInt(db.sqrtPriceX96),
-    liquidity: BigInt(db.liquidity),
-    currentTick: db.currentTick,
-  };
 }
 ```
 
-### Extensibility
-
-Adding support for a new **EVM chain** (like Arbitrum, Base, Polygon):
-
-**Already supported!** All EVM chains use the same `Erc20TokenConfig`:
-```typescript
-// Works for any EVM chain - just change chainId
-const usdcArbitrum: Erc20Token = {
-  tokenType: 'evm-erc20',
-  name: "USD Coin",
-  symbol: "USDC",
-  decimals: 6,
-  config: {
-    address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    chainId: 42161  // Arbitrum
-  }
-};
-```
-
-Adding a **new blockchain ecosystem** (non-EVM, non-Solana):
-
-1. **Define the config interface**:
-```typescript
-interface CosmosTokenConfig {
-  denom: string;  // Cosmos denomination
-  chainId: string; // e.g., "cosmoshub-4"
-}
-```
-
-2. **Add to union type**:
-```typescript
-type TokenConfig =
-  | Erc20TokenConfig
-  | SolanaTokenConfig
-  | CosmosTokenConfig;
-```
-
-3. **Update discriminator**:
-```typescript
-type TokenType = 'evm-erc20' | 'solana-spl' | 'cosmos-native';
-```
-
-4. **Create type alias**:
-```typescript
-type CosmosToken = Token<CosmosTokenConfig>;
-```
-
-**No database migration needed!** The JSON field and indexes accommodate the new structure immediately.
-
-## Package Organization
-
-Midcurve Finance is organized into two complementary packages:
-
-### @midcurve/shared (Separate Repository)
-
-**Repository:** `../midcurve-shared/`
-
-A standalone TypeScript package containing:
-- **Types**: All shared type definitions (Token, Pool, Position, etc.)
-- **Utilities**: Pure utility functions
-  - EVM address utilities (validation, normalization, comparison)
-  - UniswapV3 calculations (price, liquidity, position math)
-  - Mathematical helpers
-
-**Purpose:**
-- Consumed by all Midcurve projects (API, UI, Workers, Services)
-- Zero dependencies on databases or services
-- Framework-agnostic (works in Node.js, browser, edge runtimes)
-- Independently versioned and published to npm
-
-**Installation:**
-```bash
-npm install @midcurve/shared
-```
-
-**Usage:**
-```typescript
-import { Token, Erc20Token, normalizeAddress, sqrtPriceX96ToPrice } from '@midcurve/shared';
-```
-
-### @midcurve/services (This Repository)
-
-Contains:
-- **Services**: Business logic and CRUD operations (requires Prisma)
-- **Config**: Chain configuration and RPC management
-- **Clients**: External API clients (CoinGecko, Etherscan, Subgraphs)
-- **Service-specific utilities**: ERC-20 contract readers, APR calculations
-- **Database schema**: Prisma models and migrations
-
-**Dependency:**
-```json
-{
-  "dependencies": {
-    "@midcurve/shared": "file:../midcurve-shared"
-  }
-}
-```
-
-**Key Difference:**
-- `@midcurve/shared` = Pure types + utilities (no DB, no services)
-- `@midcurve/services` = Business logic + DB operations (consumes shared)
-
+---
 ## Project Structure
 
 ```
@@ -480,17 +180,25 @@ midcurve-services/
 - Request scheduling and rate limiting (for external APIs)
 - Note: Core utilities (address validation, math) are in `@midcurve/shared`
 
-## Technology Stack
+---
 
-- **Language**: TypeScript 5.3+ (strict mode, ESM)
-- **Runtime**: Node.js 18+
-- **Database**: PostgreSQL with Prisma ORM 5.7+
-- **Module System**: ES Modules (Next.js/Vercel compatible)
-- **Package Manager**: npm/pnpm/yarn
-- **Testing**: Vitest 3.2+ (fast, native ESM support)
-- **Libraries**:
-  - `viem` 2.38+ - Ethereum utilities, EIP-55 checksumming
-  - `vitest-mock-extended` 3.1+ - Type-safe Prisma mocking
+## Technology Stack (Services-Specific)
+
+### Core
+- **TypeScript 5.3+** - Strict mode, ESM modules
+- **Node.js 18+** - Server-side runtime
+- **Prisma 6.17.1** - ORM and schema management
+- **PostgreSQL** - Primary database with JSON columns
+
+### Services-Specific Libraries
+- **viem 2.38+** - Ethereum utilities, EIP-55 checksumming, contract reading
+- **vitest 3.2+** - Fast test framework with native ESM support
+- **vitest-mock-extended 3.1+** - Type-safe Prisma mocking
+
+For complete technology stack across all packages, see:
+**[Technology Stack](../CLAUDE.md#technology-stack)**
+
+---
 
 ## Service Layer Architecture
 
@@ -638,7 +346,6 @@ interface Token<TConfig> {
   // ... other fields
 }
 ```
-
 ## EVM Utilities
 
 ### Address Operations (`src/utils/evm.ts`)
@@ -870,9 +577,15 @@ describe('TokenService', () => {
 - ✅ Type-safe mocks
 - ✅ Clear test organization
 
-## Architecture Decisions
 
-### Why Dependency Injection?
+## Architecture Decisions (Services-Specific)
+
+For overall architectural decisions (PostgreSQL caching rationale, type hierarchy, etc.), see:
+**[Architecture Principles](../CLAUDE.md#architecture-principles)**
+
+### Services-Layer Specific Decisions
+
+#### Why Dependency Injection?
 
 **Pattern:**
 ```typescript
@@ -889,7 +602,7 @@ class Erc20TokenService {
 - ✅ **Control**: Explicit dependency management
 - ✅ **Optional**: Defaults provided for convenience
 
-### Why Specialized Services?
+#### Why Specialized Services?
 
 Instead of one monolithic service, we have:
 - **Base service** (`TokenService`) - Generic operations, all token types
@@ -901,17 +614,16 @@ Instead of one monolithic service, we have:
 - ✅ **DRY principle**: Base service provides common functionality
 - ✅ **Extensibility**: Easy to add new platform services
 
-### Why Address Normalization?
+#### Why Address Normalization?
 
-Without normalization:
+Without normalization, these would be treated as different tokens:
 ```typescript
-// These would be treated as different tokens!
 '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
 '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
 '0xA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48'
 ```
 
-With normalization:
+With normalization (EIP-55):
 ```typescript
 // All normalized to same format
 normalizeAddress('0xa0b8...') // 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
@@ -927,7 +639,7 @@ service.findByAddressAndChain('0xA0B8...', 1); // ✅ Found
 - ✅ Efficient queries
 - ✅ EIP-55 checksum validation
 
-### Why Separate Service Types?
+#### Why Separate Service Types?
 
 **Architecture:**
 ```
@@ -948,39 +660,7 @@ Database (Prisma)
 - Clear boundary between layers
 - Type safety at compile time
 
-### Why PostgreSQL for Caching (Not Redis)?
-
-Midcurve Services uses **PostgreSQL** as the distributed cache backend instead of Redis.
-
-**The Problem:**
-- CoinGecko free API has strict rate limits (~30 calls/minute)
-- Multiple workers/processes/serverless functions need to share cache
-- In-memory singleton cache doesn't work across process boundaries
-- Need cache that survives deployments and restarts
-
-**Why PostgreSQL Instead of Redis:**
-
-✅ **Already Available**: PostgreSQL is already running in all environments (dev, test, production)
-✅ **No New Infrastructure**: No additional service to deploy, manage, or pay for
-✅ **Persistent Cache**: Cache survives application restarts, deployments, and server reboots
-✅ **Lower Total Cost**: No Redis hosting fees (Upstash, Redis Labs, etc.)
-✅ **Good Enough Performance**: 3ms vs 1ms cache lookup is irrelevant when replacing 200-500ms+ API calls
-✅ **Type-Safe with Prisma**: Leverage existing Prisma client and type system
-✅ **ACID Guarantees**: Transactions and consistency built-in
-✅ **Version Controlled Schema**: Cache table managed via Prisma migrations
-
-**Performance Analysis:**
-- PostgreSQL cache lookup: ~1-5ms
-- Redis cache lookup: ~0.1-1ms
-- CoinGecko API call: ~200-500ms+
-- **Conclusion**: Cache speed difference is negligible compared to API call savings
-
-**When Would Redis Be Better?**
-Redis would only be preferable if:
-- Cache reads > 10,000/second (not our use case)
-- Sub-millisecond latency critical (it's not for API caching)
-- Ephemeral cache desired (we want persistent)
-- Already using Redis for other features (we're not)
+---
 
 ## Distributed Caching Architecture
 
@@ -1202,38 +882,6 @@ app.post('/api/admin/cache/clear', async (req, res) => {
 });
 ```
 
-## Future Roadmap
-
-### ✅ Phase 1: Extract Shared Types (COMPLETED)
-The `src/shared` directory has been successfully extracted into a separate repository (`@midcurve/shared`) and is now consumed as an independent package by all projects.
-
-**Completed:**
-- Created `@midcurve/shared` package with types and utilities
-- Migrated EVM address utilities and UniswapV3 math functions
-- Updated all import paths in `@midcurve/services`
-- All tests passing (107 tests in shared, 645 tests in services)
-
-### Phase 2: Service Layer Implementation
-Implement core services:
-- Position tracking and monitoring
-- Risk calculation algorithms
-- Automated rebalancing strategies
-- Fee collection optimization
-- Impermanent loss tracking
-
-### Phase 3: Multi-Platform Support
-Expand to additional platforms:
-- Arbitrum (Uniswap V3)
-- Polygon (QuickSwap, Uniswap V3)
-- Optimism (Velodrome, Uniswap V3)
-- Additional Solana DEXs
-
-### Phase 4: Advanced Features
-- Machine learning for optimal rebalancing
-- Historical performance analytics
-- Gas optimization strategies
-- Cross-chain position management
-
 ## EVM Configuration
 
 ### Overview
@@ -1446,16 +1094,16 @@ const service = new Erc20TokenService({
 5. **Testable**: Easy to mock in unit tests
 6. **Extensible**: Add new chains without breaking existing code
 
-## Development Philosophy
+---
 
-1. **Type Safety First**: Leverage TypeScript's type system for correctness
-2. **Platform Agnostic**: Abstract interfaces over concrete implementations
-3. **Testability**: Business logic should be easily testable
-4. **Documentation**: Code should be self-documenting with clear types
-5. **Performance**: Optimize for production use at scale
-6. **Extensibility**: Easy to add new platforms and features
+## Development Setup
 
-## Getting Started
+### Prerequisites
+1. **Node.js 18+** installed
+2. **PostgreSQL** database running
+3. **@midcurve/shared** package built (`cd ../midcurve-shared && npm run build`)
+
+### Installation
 
 ```bash
 # Install dependencies
@@ -1463,25 +1111,74 @@ npm install
 
 # Set up environment variables
 cp .env.example .env
-# Edit .env and add your RPC URLs
+# Edit .env with DATABASE_URL and RPC URLs
 
 # Generate Prisma client
 npm run prisma:generate
 
 # Build the project
 npm run build
-
-# Run in development mode (watch)
-npm run dev
-
-# Run tests
-npm test                # Watch mode
-npm run test:run        # Single run
-npm run test:coverage   # With coverage
-
-# Type checking (without build)
-npm run type-check
 ```
+
+For complete development setup across the monorepo, see:
+**[Development Setup](../CLAUDE.md#development-setup)**
+
+### Development Commands
+
+```bash
+# Development
+npm run dev          # Watch mode with auto-rebuild
+
+# Type checking
+npm run type-check   # Check types without build
+
+# Building
+npm run build        # Production build
+
+# Testing
+npm test             # Watch mode (121+ tests)
+npm run test:run     # Single run
+npm run test:coverage # With coverage
+
+# Prisma
+npm run prisma:generate  # Generate Prisma client
+npm run prisma:studio    # Open Prisma Studio
+
+# Yalc (for API/workers consumption)
+npm run yalc:publish  # Build + publish to yalc store
+npm run yalc:push     # Build + push to all consumers
+```
+
+---
+
+## Environment Variables (Services-Specific)
+
+### Required
+
+```bash
+DATABASE_URL="postgresql://user:password@localhost:5432/midcurve"
+NODE_ENV="development"
+```
+
+### Optional (EVM Configuration)
+
+```bash
+# Configure only chains you plan to use
+RPC_URL_ETHEREUM="https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+RPC_URL_ARBITRUM="https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+RPC_URL_BASE="https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+RPC_URL_BSC="https://bsc-dataseed1.binance.org"
+RPC_URL_POLYGON="https://polygon-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+RPC_URL_OPTIMISM="https://opt-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+
+# Token enrichment
+COINGECKO_API_KEY="your-coingecko-key"
+```
+
+For complete environment setup, see:
+**[Development Setup](../CLAUDE.md#development-setup)**
+
+---
 
 ## Integration Example
 
@@ -1561,6 +1258,52 @@ if (isValidAddress(userInputAddress)) {
   // Store normalized address in database
 }
 ```
+
+---
+
+**Midcurve Finance** - Professional risk management for concentrated liquidity providers
+
+---
+
+## Roadmap
+
+For the complete project roadmap across all packages, see:
+**[Project Roadmap](../CLAUDE.md#project-roadmap)**
+
+### Services-Specific Upcoming Work
+
+**Phase 2: Service Layer Implementation** (Current)
+- Position tracking and monitoring
+- Risk calculation algorithms
+- Automated rebalancing strategies
+- Fee collection optimization
+- Impermanent loss tracking
+
+**Phase 3: Multi-Platform Support**
+- Arbitrum, Polygon, Optimism (Uniswap V3 forks)
+- Solana DEXs (Orca, Raydium)
+- Cross-chain position management
+
+---
+
+## Related Documentation
+
+### Monorepo Documentation
+- **[Central CLAUDE.md](../CLAUDE.md)** - Architecture, philosophy, ecosystem overview
+- **[API CLAUDE.md](../midcurve-api/CLAUDE.md)** - REST endpoints implementation
+- **[Shared README.md](../midcurve-shared/README.md)** - Type definitions and utilities
+
+### External Documentation
+- **[Prisma Documentation](https://www.prisma.io/docs)** - ORM and schema management
+- **[Viem Documentation](https://viem.sh)** - Ethereum utilities
+- **[Vitest Documentation](https://vitest.dev)** - Testing framework
+
+---
+
+## Contributing
+
+For contributing guidelines, git workflow, and commit message format, see:
+**[Contributing Section](../CLAUDE.md#contributing)**
 
 ---
 
