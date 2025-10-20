@@ -824,4 +824,115 @@ export class Erc20TokenService extends TokenService<"erc20"> {
             throw error;
         }
     }
+
+    // ============================================================================
+    // SEARCH OPERATIONS
+    // ============================================================================
+
+    /**
+     * Search for ERC-20 tokens by symbol and/or name within a specific chain
+     *
+     * Returns up to 10 matching tokens, ordered alphabetically by symbol.
+     * Users should provide more specific search terms if they need fewer results.
+     *
+     * @param params.chainId - Chain ID (REQUIRED)
+     * @param params.symbol - Partial symbol match (optional, case-insensitive)
+     * @param params.name - Partial name match (optional, case-insensitive)
+     * @returns Array of matching tokens (max 10)
+     * @throws Error if neither symbol nor name provided
+     */
+    async searchTokens(params: {
+        chainId: number;
+        symbol?: string;
+        name?: string;
+    }): Promise<Token<"erc20">[]> {
+        const { chainId, symbol, name } = params;
+        log.methodEntry(this.logger, "searchTokens", { chainId, symbol, name });
+
+        try {
+            // Validate at least one search term provided
+            if (!symbol && !name) {
+                const error = new Error(
+                    "At least one search parameter (symbol or name) must be provided"
+                );
+                log.methodError(this.logger, "searchTokens", error, { chainId });
+                throw error;
+            }
+
+            // Build where clause
+            const where: any = {
+                tokenType: "erc20",
+                config: {
+                    path: ["chainId"],
+                    equals: chainId,
+                },
+            };
+
+            // Add symbol filter if provided
+            if (symbol) {
+                where.symbol = {
+                    contains: symbol,
+                    mode: "insensitive",
+                };
+            }
+
+            // Add name filter if provided
+            if (name) {
+                where.name = {
+                    contains: name,
+                    mode: "insensitive",
+                };
+            }
+
+            this.logger.debug(
+                { chainId, symbol, name },
+                "Searching tokens with filters"
+            );
+
+            log.dbOperation(this.logger, "findMany", "Token", {
+                chainId,
+                symbol,
+                name,
+                limit: 10,
+            });
+
+            // Execute query
+            const results = await this.prisma.token.findMany({
+                where,
+                orderBy: {
+                    symbol: "asc",
+                },
+                take: 10,
+            });
+
+            // Map to Token<'erc20'>[]
+            const tokens = results.map((result) => this.mapToToken(result));
+
+            this.logger.info(
+                { chainId, symbol, name, count: tokens.length },
+                "Token search completed"
+            );
+
+            log.methodExit(this.logger, "searchTokens", {
+                count: tokens.length,
+            });
+
+            return tokens;
+        } catch (error) {
+            // Only log if not already logged
+            if (
+                !(
+                    error instanceof Error &&
+                    error.message.includes("At least one search parameter")
+                )
+            ) {
+                log.methodError(this.logger, "searchTokens", error as Error, {
+                    chainId,
+                    symbol,
+                    name,
+                });
+            }
+            throw error;
+        }
+    }
 }

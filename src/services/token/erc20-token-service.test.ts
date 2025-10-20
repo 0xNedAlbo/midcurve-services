@@ -1896,4 +1896,296 @@ describe('Erc20TokenService', () => {
       });
     });
   });
+
+  // ==========================================================================
+  // Search Tests
+  // ==========================================================================
+
+  describe('searchTokens', () => {
+    const chainId = 1; // Ethereum
+
+    const mockTokens = [
+      {
+        id: '1',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date('2024-01-01'),
+        tokenType: 'erc20',
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimals: 6,
+        logoUrl: 'https://...',
+        coingeckoId: 'usd-coin',
+        marketCap: 32000000000,
+        config: {
+          address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          chainId: 1,
+        },
+      },
+      {
+        id: '2',
+        createdAt: new Date('2024-01-02'),
+        updatedAt: new Date('2024-01-02'),
+        tokenType: 'erc20',
+        name: 'Tether USD',
+        symbol: 'USDT',
+        decimals: 6,
+        logoUrl: 'https://...',
+        coingeckoId: 'tether',
+        marketCap: 95000000000,
+        config: {
+          address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+          chainId: 1,
+        },
+      },
+      {
+        id: '3',
+        createdAt: new Date('2024-01-03'),
+        updatedAt: new Date('2024-01-03'),
+        tokenType: 'erc20',
+        name: 'Wrapped Ether',
+        symbol: 'WETH',
+        decimals: 18,
+        logoUrl: 'https://...',
+        coingeckoId: 'weth',
+        marketCap: 12000000000,
+        config: {
+          address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+          chainId: 1,
+        },
+      },
+    ];
+
+    describe('successful search', () => {
+      it('should search by symbol only', async () => {
+        const usdTokens = [mockTokens[0], mockTokens[1]]; // USDC, USDT
+
+        prismaMock.token.findMany.mockResolvedValue(usdTokens);
+
+        const result = await service.searchTokens({
+          chainId,
+          symbol: 'usd',
+        });
+
+        expect(result).toHaveLength(2);
+        expect(result[0].symbol).toBe('USDC');
+        expect(result[1].symbol).toBe('USDT');
+
+        // Verify query was built correctly
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
+          where: {
+            tokenType: 'erc20',
+            config: {
+              path: ['chainId'],
+              equals: 1,
+            },
+            symbol: {
+              contains: 'usd',
+              mode: 'insensitive',
+            },
+          },
+          orderBy: {
+            symbol: 'asc',
+          },
+          take: 10,
+        });
+      });
+
+      it('should search by name only', async () => {
+        const coinTokens = [mockTokens[0]]; // USD Coin
+
+        prismaMock.token.findMany.mockResolvedValue(coinTokens);
+
+        const result = await service.searchTokens({
+          chainId,
+          name: 'coin',
+        });
+
+        expect(result).toHaveLength(1);
+        expect(result[0].name).toBe('USD Coin');
+
+        // Verify query was built correctly
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
+          where: {
+            tokenType: 'erc20',
+            config: {
+              path: ['chainId'],
+              equals: 1,
+            },
+            name: {
+              contains: 'coin',
+              mode: 'insensitive',
+            },
+          },
+          orderBy: {
+            symbol: 'asc',
+          },
+          take: 10,
+        });
+      });
+
+      it('should search by both symbol and name', async () => {
+        const matchingTokens = [mockTokens[2]]; // Wrapped Ether
+
+        prismaMock.token.findMany.mockResolvedValue(matchingTokens);
+
+        const result = await service.searchTokens({
+          chainId,
+          symbol: 'eth',
+          name: 'wrapped',
+        });
+
+        expect(result).toHaveLength(1);
+        expect(result[0].symbol).toBe('WETH');
+        expect(result[0].name).toBe('Wrapped Ether');
+
+        // Verify both filters applied
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith({
+          where: {
+            tokenType: 'erc20',
+            config: {
+              path: ['chainId'],
+              equals: 1,
+            },
+            symbol: {
+              contains: 'eth',
+              mode: 'insensitive',
+            },
+            name: {
+              contains: 'wrapped',
+              mode: 'insensitive',
+            },
+          },
+          orderBy: {
+            symbol: 'asc',
+          },
+          take: 10,
+        });
+      });
+
+      it('should return max 10 results when more exist', async () => {
+        // Create 15 mock tokens
+        const manyTokens = Array.from({ length: 15 }, (_, i) => ({
+          ...mockTokens[0],
+          id: `token-${i}`,
+          symbol: `TOKEN${i}`,
+        }));
+
+        // Prisma will only return 10 due to take: 10
+        prismaMock.token.findMany.mockResolvedValue(manyTokens.slice(0, 10));
+
+        const result = await service.searchTokens({
+          chainId,
+          symbol: 'token',
+        });
+
+        expect(result).toHaveLength(10);
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            take: 10,
+          })
+        );
+      });
+
+      it('should return results ordered alphabetically by symbol', async () => {
+        const unorderedTokens = [mockTokens[2], mockTokens[0], mockTokens[1]]; // WETH, USDC, USDT
+
+        prismaMock.token.findMany.mockResolvedValue(unorderedTokens);
+
+        await service.searchTokens({
+          chainId,
+          symbol: 'u',
+        });
+
+        // Verify orderBy was specified
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            orderBy: {
+              symbol: 'asc',
+            },
+          })
+        );
+      });
+
+      it('should return empty array when no matches found', async () => {
+        prismaMock.token.findMany.mockResolvedValue([]);
+
+        const result = await service.searchTokens({
+          chainId,
+          symbol: 'nonexistent',
+        });
+
+        expect(result).toEqual([]);
+        expect(result).toHaveLength(0);
+      });
+
+      it('should perform case-insensitive search', async () => {
+        prismaMock.token.findMany.mockResolvedValue([mockTokens[0]]);
+
+        await service.searchTokens({
+          chainId,
+          symbol: 'UsDc', // Mixed case
+        });
+
+        // Verify case-insensitive mode was used
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              symbol: {
+                contains: 'UsDc',
+                mode: 'insensitive',
+              },
+            }),
+          })
+        );
+      });
+
+      it('should search within specific chain only', async () => {
+        prismaMock.token.findMany.mockResolvedValue([mockTokens[0]]);
+
+        await service.searchTokens({
+          chainId: 56, // BSC
+          symbol: 'usdc',
+        });
+
+        // Verify chainId filter
+        expect(prismaMock.token.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              config: {
+                path: ['chainId'],
+                equals: 56,
+              },
+            }),
+          })
+        );
+      });
+    });
+
+    describe('validation errors', () => {
+      it('should throw error if neither symbol nor name provided', async () => {
+        await expect(
+          service.searchTokens({
+            chainId,
+          })
+        ).rejects.toThrow('At least one search parameter (symbol or name) must be provided');
+
+        // Should not query database
+        expect(prismaMock.token.findMany).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('database errors', () => {
+      it('should propagate database errors', async () => {
+        const dbError = new Error('Database connection failed');
+        prismaMock.token.findMany.mockRejectedValue(dbError);
+
+        await expect(
+          service.searchTokens({
+            chainId,
+            symbol: 'usdc',
+          })
+        ).rejects.toThrow('Database connection failed');
+      });
+    });
+  });
 });

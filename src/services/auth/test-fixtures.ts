@@ -48,8 +48,8 @@ export const ALICE: UserFixture = {
 export const BOB: UserFixture = {
   input: {
     name: 'Bob',
-    email: null,
-    image: null,
+    email: undefined,
+    image: undefined,
   },
   dbResult: {
     id: 'user_bob_001',
@@ -68,7 +68,7 @@ export const CHARLIE: UserFixture = {
   input: {
     name: 'Charlie',
     email: 'charlie@example.com',
-    image: null,
+    image: undefined,
   },
   dbResult: {
     id: 'user_charlie_001',
@@ -243,8 +243,8 @@ export function createUserFixture(
 ): UserFixture {
   const id = overrides.id ?? 'user_test_001';
   const name = overrides.name ?? 'Test User';
-  const email = overrides.email ?? null;
-  const image = overrides.image ?? null;
+  const email = overrides.email ?? undefined;
+  const image = overrides.image ?? undefined;
 
   return {
     input: {
@@ -257,8 +257,8 @@ export function createUserFixture(
     dbResult: {
       id,
       name,
-      email,
-      image,
+      email: email ?? null,
+      image: image ?? null,
       createdAt: new Date('2024-01-01T00:00:00.000Z'),
       updatedAt: new Date('2024-01-01T00:00:00.000Z'),
     },
