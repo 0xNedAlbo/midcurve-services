@@ -37,7 +37,9 @@
     "yalc:link": "yalc add @midcurve/shared && npm install",
     "yalc:update": "yalc update @midcurve/shared",
     "yalc:unlink": "yalc remove @midcurve/shared && npm install",
-    "yalc:clean": "rimraf .yalc yalc.lock"
+    "yalc:clean": "rimraf .yalc yalc.lock",
+    "yalc:publish": "npm run build && yalc publish",
+    "yalc:push": "npm run build && yalc push"
   },
   "keywords": [
     "midcurve",
@@ -52,8 +54,9 @@
   "author": "Midcurve Finance",
   "license": "MIT",
   "devDependencies": {
+    "@prisma/client": "^6.17.1",
     "@types/node": "^20.10.0",
-    "prisma": "^5.7.0",
+    "prisma": "^6.17.1",
     "typescript": "^5.3.3",
     "vitest": "^3.2.4",
     "vitest-mock-extended": "^3.1.0",
@@ -61,13 +64,15 @@
   },
   "dependencies": {
     "@midcurve/shared": "file:.yalc/@midcurve/shared",
-    "@prisma/client": "^5.7.0",
     "@uniswap/sdk-core": "^7.8.0",
     "@uniswap/v3-sdk": "^3.26.0",
     "jsbi": "^4.3.2",
     "nanoid": "^5.1.6",
     "pino": "^10.0.0",
     "viem": "^2.38.2"
+  },
+  "peerDependencies": {
+    "@prisma/client": "^6.17.1"
   },
   "engines": {
     "node": ">=18.0.0"
