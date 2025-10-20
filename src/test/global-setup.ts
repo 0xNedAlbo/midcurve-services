@@ -121,7 +121,7 @@ export default async function globalSetup() {
 
     // Push schema to test database (creates/updates tables without migrations)
     console.log('📦 Pushing database schema...');
-    execSync('npx prisma db push --skip-generate', {
+    execSync('npx prisma db push --skip-generate --accept-data-loss', {
       stdio: 'inherit',
       env: { ...process.env, DATABASE_URL: databaseUrl },
     });

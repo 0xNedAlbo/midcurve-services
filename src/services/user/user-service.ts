@@ -6,7 +6,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import type { User } from '@midcurve/shared';
+import type { User } from '@prisma/client';
 import type { CreateUserInput, UpdateUserInput } from '../types/user/index.js';
 
 /**

@@ -26,6 +26,7 @@ export * from './logging/index.js';
 export * from './clients/index.js';
 
 // Export services
+export * from './services/auth/index.js';
 export * from './services/user/index.js';
 export * from './services/token/index.js';
 export * from './services/pool/index.js';
@@ -35,5 +36,16 @@ export * from './services/position-apr/index.js';
 export * from './services/quote-token/index.js';
 export * from './services/pool-discovery/index.js';
 export * from './services/cache/index.js';
+
+// Export auth types
+export * from './services/types/auth/index.js';
+
+// Export auth utilities (specific exports to avoid conflicts)
+export {
+  validateAndNormalizeAddress,
+  validateChainId,
+  isSupportedChainId,
+  CHAIN_NAMES,
+} from './utils/auth/index.js';
 
 export const version = '0.1.0';

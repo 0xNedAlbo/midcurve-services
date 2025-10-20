@@ -5,7 +5,7 @@
  * These types are NOT shared with UI/API - they're specific to the service layer.
  */
 
-import type { User } from '@midcurve/shared';
+import type { User } from '@prisma/client';
 
 /**
  * Input type for creating a new user
