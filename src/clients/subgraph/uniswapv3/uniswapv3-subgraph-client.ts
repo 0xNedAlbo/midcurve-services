@@ -579,6 +579,9 @@ export class UniswapV3SubgraphClient {
    * We need to convert them to bigint strings representing token units
    * (e.g., "1234567000" for a 6-decimal token).
    *
+   * Uses string manipulation to avoid precision loss from parseFloat()
+   * which can't handle large numbers (>2^53) and converts them to scientific notation.
+   *
    * @param decimalStr - Decimal string from subgraph
    * @param decimals - Token decimals
    * @returns BigInt string representing token units
@@ -588,6 +591,7 @@ export class UniswapV3SubgraphClient {
    * ```typescript
    * decimalToBigIntString("1234.567", 6) // "1234567000"
    * decimalToBigIntString("0.000001", 6) // "1"
+   * decimalToBigIntString("38001.234287552940", 18) // "38001234287552940000000"
    * ```
    */
   private decimalToBigIntString(decimalStr: string, decimals: number): string {
@@ -596,11 +600,19 @@ export class UniswapV3SubgraphClient {
     }
 
     try {
-      // Parse as float and multiply by 10^decimals
-      const value = parseFloat(decimalStr);
-      const multiplier = 10 ** decimals;
-      const result = Math.floor(value * multiplier);
-      return result.toString();
+      // Split into integer and fractional parts
+      const [integerPart = '0', fractionalPart = ''] = decimalStr.split('.');
+
+      // Pad or truncate fractional part to match token decimals
+      const paddedFractional = fractionalPart.padEnd(decimals, '0').slice(0, decimals);
+
+      // Combine integer and fractional parts
+      const combined = integerPart + paddedFractional;
+
+      // Remove leading zeros and return (or '0' if empty)
+      const result = combined.replace(/^0+/, '') || '0';
+
+      return result;
     } catch (error) {
       this.logger.warn(
         { decimalStr, decimals, error },
