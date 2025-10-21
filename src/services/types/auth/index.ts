@@ -9,5 +9,6 @@ export type {
   UserWithApiKeys,
   UserWithAuth,
   ApiKeyCreationResult,
-  ApiKeyDisplay,
 } from './auth-input.js';
+
+// NOTE: ApiKeyDisplay is exported from @midcurve/shared (see src/index.ts line 14)

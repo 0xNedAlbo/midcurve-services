@@ -72,15 +72,5 @@ export interface ApiKeyCreationResult {
   key: string; // Full plaintext key (mc_live_...)
 }
 
-/**
- * Safe API key display (no hash, no full key)
- * Used for listing user's keys
- */
-export interface ApiKeyDisplay {
-  id: string;
-  name: string;
-  keyPrefix: string;
-  lastUsed: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+// NOTE: ApiKeyDisplay is now in @midcurve/shared and re-exported from there
+// This allows it to be used by API, UI, and services without duplication
