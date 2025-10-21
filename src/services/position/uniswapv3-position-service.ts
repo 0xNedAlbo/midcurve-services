@@ -34,6 +34,7 @@ import {
 import { UniswapV3PoolService } from '../pool/uniswapv3-pool-service.js';
 import { EtherscanClient } from '../../clients/etherscan/index.js';
 import { UniswapV3PositionLedgerService } from '../position-ledger/uniswapv3-position-ledger-service.js';
+import { UniswapV3QuoteTokenService } from '../quote-token/uniswapv3-quote-token-service.js';
 import type { Address } from 'viem';
 import {
   computeFeeGrowthInside,
@@ -77,6 +78,12 @@ export interface UniswapV3PositionServiceDependencies {
    * If not provided, a new UniswapV3PositionLedgerService instance will be created
    */
   ledgerService?: import('../position-ledger/uniswapv3-position-ledger-service.js').UniswapV3PositionLedgerService;
+
+  /**
+   * Uniswap V3 quote token service for automatic quote token determination
+   * If not provided, a new UniswapV3QuoteTokenService instance will be created
+   */
+  quoteTokenService?: UniswapV3QuoteTokenService;
 }
 
 /**
@@ -90,6 +97,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   private readonly _poolService: UniswapV3PoolService;
   private readonly _etherscanClient: EtherscanClient;
   private readonly _ledgerService: UniswapV3PositionLedgerService;
+  private readonly _quoteTokenService: UniswapV3QuoteTokenService;
 
   /**
    * Creates a new UniswapV3PositionService instance
@@ -100,6 +108,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    * @param dependencies.poolService - UniswapV3 pool service (creates default if not provided)
    * @param dependencies.etherscanClient - Etherscan client instance (uses singleton if not provided)
    * @param dependencies.ledgerService - UniswapV3 position ledger service (creates default if not provided)
+   * @param dependencies.quoteTokenService - UniswapV3 quote token service (creates default if not provided)
    */
   constructor(dependencies: UniswapV3PositionServiceDependencies = {}) {
     super(dependencies);
@@ -115,6 +124,9 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         prisma: this.prisma,
         positionService: this, // Pass self to break circular dependency
       });
+    this._quoteTokenService =
+      dependencies.quoteTokenService ??
+      new UniswapV3QuoteTokenService({ prisma: this.prisma });
   }
 
   /**
@@ -143,6 +155,13 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    */
   protected get ledgerService(): UniswapV3PositionLedgerService {
     return this._ledgerService;
+  }
+
+  /**
+   * Get the quote token service instance
+   */
+  protected get quoteTokenService(): UniswapV3QuoteTokenService {
+    return this._quoteTokenService;
   }
 
   // ============================================================================
@@ -267,12 +286,12 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
    * the latest on-chain values.
    *
    * @param userId - User ID who owns this position (database foreign key to User.id)
-   * @param params - Discovery parameters { chainId, nftId, quoteTokenAddress }
+   * @param params - Discovery parameters { chainId, nftId, quoteTokenAddress? }
    * @returns The discovered or existing position
    * @throws Error if chainId is not supported
-   * @throws Error if quoteTokenAddress format is invalid
+   * @throws Error if quoteTokenAddress format is invalid (when provided)
    * @throws Error if NFT doesn't exist or isn't a Uniswap V3 position
-   * @throws Error if quoteTokenAddress doesn't match either pool token
+   * @throws Error if quoteTokenAddress doesn't match either pool token (when provided)
    * @throws Error if on-chain read fails
    */
   override async discover(
@@ -284,7 +303,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       userId,
       chainId,
       nftId,
-      quoteTokenAddress,
+      quoteTokenAddress: quoteTokenAddress ?? 'auto-detect',
     });
 
     try {
@@ -312,25 +331,30 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         return existing;
       }
 
-      // 2. Validate quoteTokenAddress format
-      if (!isValidAddress(quoteTokenAddress)) {
-        const error = new Error(
-          `Invalid quote token address format: ${quoteTokenAddress}`
-        );
-        log.methodError(this.logger, 'discover', error, {
-          userId,
-          chainId,
-          nftId,
-          quoteTokenAddress,
-        });
-        throw error;
-      }
+      // 2. Validate quoteTokenAddress IF PROVIDED
+      let normalizedQuoteAddress: string | undefined;
+      if (quoteTokenAddress) {
+        if (!isValidAddress(quoteTokenAddress)) {
+          const error = new Error(
+            `Invalid quote token address format: ${quoteTokenAddress}`
+          );
+          log.methodError(this.logger, 'discover', error, {
+            userId,
+            chainId,
+            nftId,
+            quoteTokenAddress,
+          });
+          throw error;
+        }
 
-      const normalizedQuoteAddress = normalizeAddress(quoteTokenAddress);
-      this.logger.debug(
-        { original: quoteTokenAddress, normalized: normalizedQuoteAddress },
-        'Quote token address normalized for discovery'
-      );
+        normalizedQuoteAddress = normalizeAddress(quoteTokenAddress);
+        this.logger.debug(
+          { original: quoteTokenAddress, normalized: normalizedQuoteAddress },
+          'Quote token address provided by caller'
+        );
+      } else {
+        this.logger.debug('No quote token provided, will auto-detect using QuoteTokenService');
+      }
 
       // 3. Verify chain is supported
       if (!this.evmConfig.isChainSupported(chainId)) {
@@ -489,32 +513,64 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Pool discovered/fetched'
       );
 
-      // 7. Determine base/quote tokens and set token0IsQuote
-      const token0IsQuote =
-        compareAddresses(pool.token0.config.address, normalizedQuoteAddress) ===
-        0;
-      const token1IsQuote =
-        compareAddresses(pool.token1.config.address, normalizedQuoteAddress) ===
-        0;
+      // 7. Determine quote token
+      let isToken0Quote: boolean;
 
-      if (!token0IsQuote && !token1IsQuote) {
-        const error = new Error(
-          `Quote token address ${normalizedQuoteAddress} does not match either pool token. ` +
-            `Pool token0: ${pool.token0.config.address}, token1: ${pool.token1.config.address}`
+      if (normalizedQuoteAddress) {
+        // EXPLICIT MODE: User provided quoteTokenAddress
+        const token0Matches =
+          compareAddresses(pool.token0.config.address, normalizedQuoteAddress) === 0;
+        const token1Matches =
+          compareAddresses(pool.token1.config.address, normalizedQuoteAddress) === 0;
+
+        if (!token0Matches && !token1Matches) {
+          const error = new Error(
+            `Quote token address ${normalizedQuoteAddress} does not match either pool token. ` +
+              `Pool token0: ${pool.token0.config.address}, token1: ${pool.token1.config.address}`
+          );
+          log.methodError(this.logger, 'discover', error, {
+            userId,
+            chainId,
+            nftId,
+            quoteTokenAddress: normalizedQuoteAddress,
+            poolToken0: pool.token0.config.address,
+            poolToken1: pool.token1.config.address,
+          });
+          throw error;
+        }
+
+        isToken0Quote = token0Matches;
+
+        this.logger.debug(
+          {
+            isToken0Quote,
+            quoteToken: isToken0Quote ? pool.token0.symbol : pool.token1.symbol,
+          },
+          'Quote token determined from caller input'
         );
-        log.methodError(this.logger, 'discover', error, {
+      } else {
+        // AUTO-DETECT MODE: Use QuoteTokenService
+        this.logger.debug('Auto-detecting quote token using QuoteTokenService');
+
+        const quoteResult = await this.quoteTokenService.determineQuoteToken({
           userId,
           chainId,
-          nftId,
-          quoteTokenAddress: normalizedQuoteAddress,
-          poolToken0: pool.token0.config.address,
-          poolToken1: pool.token1.config.address,
+          token0Address: pool.token0.config.address,
+          token1Address: pool.token1.config.address,
         });
-        throw error;
+
+        isToken0Quote = quoteResult.isToken0Quote;
+
+        this.logger.debug(
+          {
+            isToken0Quote,
+            quoteToken: isToken0Quote ? pool.token0.symbol : pool.token1.symbol,
+            matchedBy: quoteResult.matchedBy,
+          },
+          'Quote token auto-detected'
+        );
       }
 
-      // 7. Determine token roles from boolean flag
-      const isToken0Quote = token0IsQuote;  // Already calculated earlier
       const baseToken = isToken0Quote ? pool.token1 : pool.token0;
       const quoteToken = isToken0Quote ? pool.token0 : pool.token1;
 

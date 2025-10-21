@@ -31,17 +31,26 @@ export interface UniswapV3PositionDiscoverInput {
   nftId: number;
 
   /**
-   * Address of the quote token (the token used as unit of account)
-   * Will be validated and normalized to EIP-55 checksum format
+   * OPTIONAL: Address of the quote token (the token used as unit of account)
    *
-   * The service will discover the pool and determine which token is token0/token1,
-   * then set token0IsQuote in config based on comparison with this address.
+   * If provided:
+   * - Will be validated and normalized to EIP-55 checksum format
+   * - Must match either token0 or token1 in the pool
+   * - Service will use this address to determine isToken0Quote
+   *
+   * If omitted:
+   * - Quote token will be determined automatically using QuoteTokenService
+   * - Respects user preferences → chain defaults → token0 fallback
    *
    * @example
-   * // For ETH/USDC position with USDC as quote
+   * // For ETH/USDC position with USDC as quote (explicit)
    * quoteTokenAddress = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+   *
+   * @example
+   * // Auto-detect quote token (recommended for API endpoints)
+   * quoteTokenAddress = undefined
    */
-  quoteTokenAddress: string;
+  quoteTokenAddress?: string;
 }
 
 /**
