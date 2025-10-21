@@ -440,6 +440,190 @@ export const BOB_POSITION: PositionFixture = {
 };
 
 /**
+ * Position on Arbitrum (chainId: 42161)
+ * - User: Alice
+ * - Status: Active
+ * - Used for testing multi-chain filtering
+ */
+export const ARBITRUM_POSITION: PositionFixture = {
+  input: {
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    config: {
+      chainId: 42161, // Arbitrum
+      nftId: 789012,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: ACTIVE_POSITION_STATE,
+  },
+  dbResult: {
+    id: 'position_004',
+    createdAt: new Date('2024-06-20T00:00:00Z'),
+    updatedAt: new Date('2024-06-20T00:00:00Z'),
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    currentValue: '2000000000', // 2000 USDC
+    currentCostBasis: '1800000000', // 1800 USDC
+    realizedPnl: '0',
+    unrealizedPnl: '200000000', // 200 USDC profit
+    collectedFees: '15000000', // 15 USDC collected
+    unClaimedFees: '3000000', // 3 USDC unclaimed
+    lastFeesCollectedAt: new Date('2024-06-20T00:00:00Z'),
+    priceRangeLower: '1400000000',
+    priceRangeUpper: '2000000000',
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    pool: USDC_WETH_POOL,
+    positionOpenedAt: new Date('2024-06-10T00:00:00Z'),
+    positionClosedAt: null,
+    isActive: true,
+    config: {
+      chainId: 42161, // Arbitrum
+      nftId: 789012,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: {
+      ownerAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1',
+      liquidity: '1000000000000000000',
+      feeGrowthInside0LastX128: '123456789012345678901234567890',
+      feeGrowthInside1LastX128: '987654321098765432109876543210',
+      tokensOwed0: '500000',
+      tokensOwed1: '100000000000000000',
+    },
+  },
+  position: {
+    id: 'position_004',
+    createdAt: new Date('2024-06-20T00:00:00Z'),
+    updatedAt: new Date('2024-06-20T00:00:00Z'),
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    currentValue: 2000000000n,
+    currentCostBasis: 1800000000n,
+    realizedPnl: 0n,
+    unrealizedPnl: 200000000n,
+    collectedFees: 15000000n,
+    unClaimedFees: 3000000n,
+    lastFeesCollectedAt: new Date('2024-06-20T00:00:00Z'),
+    priceRangeLower: 1400000000n,
+    priceRangeUpper: 2000000000n,
+    pool: USDC_WETH_POOL,
+    isToken0Quote: true,
+    positionOpenedAt: new Date('2024-06-10T00:00:00Z'),
+    positionClosedAt: null,
+    isActive: true,
+    config: {
+      chainId: 42161, // Arbitrum
+      nftId: 789012,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: ACTIVE_POSITION_STATE,
+  },
+};
+
+/**
+ * Position on Base (chainId: 8453)
+ * - User: Alice
+ * - Status: Closed
+ * - Used for testing multi-chain filtering
+ */
+export const BASE_POSITION: PositionFixture = {
+  input: {
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    config: {
+      chainId: 8453, // Base
+      nftId: 999999,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: ZERO_POSITION_STATE,
+  },
+  dbResult: {
+    id: 'position_005',
+    createdAt: new Date('2024-04-01T00:00:00Z'),
+    updatedAt: new Date('2024-06-01T00:00:00Z'),
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    currentValue: '0',
+    currentCostBasis: '0',
+    realizedPnl: '75000000', // 75 USDC profit
+    unrealizedPnl: '0',
+    collectedFees: '30000000', // 30 USDC collected
+    unClaimedFees: '0',
+    lastFeesCollectedAt: new Date('2024-06-01T00:00:00Z'),
+    priceRangeLower: '1400000000',
+    priceRangeUpper: '2000000000',
+    poolId: USDC_WETH_POOL.id,
+    isToken0Quote: true,
+    pool: USDC_WETH_POOL,
+    positionOpenedAt: new Date('2024-04-01T00:00:00Z'),
+    positionClosedAt: new Date('2024-06-01T00:00:00Z'),
+    isActive: false,
+    config: {
+      chainId: 8453, // Base
+      nftId: 999999,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: {
+      ownerAddress: '0x0000000000000000000000000000000000000000',
+      liquidity: '0',
+      feeGrowthInside0LastX128: '0',
+      feeGrowthInside1LastX128: '0',
+      tokensOwed0: '0',
+      tokensOwed1: '0',
+    },
+  },
+  position: {
+    id: 'position_005',
+    createdAt: new Date('2024-04-01T00:00:00Z'),
+    updatedAt: new Date('2024-06-01T00:00:00Z'),
+    protocol: 'uniswapv3',
+    positionType: 'CL_TICKS',
+    userId: TEST_USER_ID,
+    currentValue: 0n,
+    currentCostBasis: 0n,
+    realizedPnl: 75000000n,
+    unrealizedPnl: 0n,
+    collectedFees: 30000000n,
+    unClaimedFees: 0n,
+    lastFeesCollectedAt: new Date('2024-06-01T00:00:00Z'),
+    priceRangeLower: 1400000000n,
+    priceRangeUpper: 2000000000n,
+    pool: USDC_WETH_POOL,
+    isToken0Quote: true,
+    positionOpenedAt: new Date('2024-04-01T00:00:00Z'),
+    positionClosedAt: new Date('2024-06-01T00:00:00Z'),
+    isActive: false,
+    config: {
+      chainId: 8453, // Base
+      nftId: 999999,
+      poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+      tickLower: -887220,
+      tickUpper: 887220,
+    },
+    state: ZERO_POSITION_STATE,
+  },
+};
+
+/**
  * Helper function to create custom position fixtures
  */
 export function createPositionFixture(
