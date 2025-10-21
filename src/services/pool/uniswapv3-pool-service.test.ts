@@ -157,8 +157,8 @@ describe('UniswapV3PoolService', () => {
       it('should discover new pool from on-chain data', async () => {
         const { dbResult, pool } = USDC_WETH_POOL;
 
-        // Mock: Pool doesn't exist
-        prismaMock.pool.findFirst.mockResolvedValue(null);
+        // Mock: Pool doesn't exist on first check in discover()
+        prismaMock.pool.findFirst.mockResolvedValueOnce(null);
 
         // Mock: Chain is supported
         evmConfigMock.isChainSupported.mockReturnValue(true);
@@ -190,7 +190,7 @@ describe('UniswapV3PoolService', () => {
         // Mock: Create pool
         prismaMock.pool.create.mockResolvedValue(dbResult);
 
-        // Mock: Find pool by address (called by create override)
+        // Mock: Find pool by address (called by create override to refetch after creation)
         prismaMock.pool.findFirst.mockResolvedValueOnce(dbResult);
 
         // Execute
@@ -208,10 +208,31 @@ describe('UniswapV3PoolService', () => {
         expect(result.state.sqrtPriceX96).toBe(1234567890123456789012345678n);
       });
 
-      it('should return existing pool (idempotent)', async () => {
-        const { dbResult } = USDC_WETH_POOL;
+      it('should return existing pool and refresh state (idempotent)', async () => {
+        const { dbResult, pool } = USDC_WETH_POOL;
 
-        // Mock: Pool already exists
+        // Mock: Pool already exists (first call to findFirst in discover)
+        prismaMock.pool.findFirst.mockResolvedValueOnce(dbResult);
+
+        // Mock: Chain is supported (for refresh)
+        evmConfigMock.isChainSupported.mockReturnValue(true);
+        evmConfigMock.getPublicClient.mockReturnValue(
+          publicClientMock as unknown as PublicClient
+        );
+
+        // Mock: Read fresh pool state from on-chain (in refresh)
+        publicClientMock.multicall.mockResolvedValueOnce([
+          [1234567890123456789012345678n, 201234], // slot0 (same as fixture)
+          9876543210987654321098765n, // liquidity (same as fixture)
+          111111111111111111111n, // feeGrowthGlobal0
+          222222222222222222222n, // feeGrowthGlobal1
+        ] as any);
+
+        // Mock: Update pool (in refresh)
+        prismaMock.pool.update.mockResolvedValue(dbResult);
+
+        // Mock: Re-fetch pool after update (in refresh, then in update override)
+        prismaMock.pool.findUnique.mockResolvedValue(dbResult);
         prismaMock.pool.findFirst.mockResolvedValue(dbResult);
 
         // Execute
@@ -221,19 +242,156 @@ describe('UniswapV3PoolService', () => {
         });
 
         // Verify
-        expect(result.id).toBe(dbResult.id);
+        expect(result.id).toBe(pool.id);
         expect(result.protocol).toBe('uniswapv3');
 
-        // Verify no on-chain calls were made
-        expect(publicClientMock.multicall).not.toHaveBeenCalled();
+        // Verify refresh was called (on-chain state was read)
+        expect(publicClientMock.multicall).toHaveBeenCalled();
+
+        // Verify pool was updated with fresh state
+        expect(prismaMock.pool.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: pool.id },
+            data: expect.objectContaining({
+              state: expect.any(Object),
+            }),
+          })
+        );
+
+        // Verify token discovery was NOT called (pool already had tokens)
         expect(erc20TokenServiceMock.discover).not.toHaveBeenCalled();
+
+        // Verify pool was NOT created (it already existed)
         expect(prismaMock.pool.create).not.toHaveBeenCalled();
+      });
+
+      it('should refresh existing pool with fresh on-chain state', async () => {
+        const { pool } = USDC_WETH_POOL;
+
+        // Create DB result with OLD state (different from what on-chain will return)
+        const dbResultWithOldState = {
+          id: pool.id,
+          createdAt: pool.createdAt,
+          updatedAt: pool.updatedAt,
+          protocol: 'uniswapv3',
+          poolType: 'CL_TICKS',
+          token0Id: pool.token0.id,
+          token1Id: pool.token1.id,
+          feeBps: 500,
+          config: {
+            chainId: 1,
+            address: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+            token0: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            token1: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+            feeBps: 500,
+            tickSpacing: 10,
+          },
+          state: {
+            sqrtPriceX96: '1000000000000000000000000000', // OLD price
+            currentTick: 100000, // OLD tick
+            liquidity: '5000000000000000000000000', // OLD liquidity
+            feeGrowthGlobal0: '100000000000000000000',
+            feeGrowthGlobal1: '200000000000000000000',
+          },
+          token0: {
+            id: pool.token0.id,
+            createdAt: pool.token0.createdAt,
+            updatedAt: pool.token0.updatedAt,
+            tokenType: 'erc20',
+            name: pool.token0.name,
+            symbol: pool.token0.symbol,
+            decimals: pool.token0.decimals,
+            logoUrl: pool.token0.logoUrl,
+            coingeckoId: pool.token0.coingeckoId,
+            marketCap: pool.token0.marketCap,
+            config: pool.token0.config,
+          },
+          token1: {
+            id: pool.token1.id,
+            createdAt: pool.token1.createdAt,
+            updatedAt: pool.token1.updatedAt,
+            tokenType: 'erc20',
+            name: pool.token1.name,
+            symbol: pool.token1.symbol,
+            decimals: pool.token1.decimals,
+            logoUrl: pool.token1.logoUrl,
+            coingeckoId: pool.token1.coingeckoId,
+            marketCap: pool.token1.marketCap,
+            config: pool.token1.config,
+          },
+        };
+
+        // Create updated DB result with FRESH state (what will be returned after update)
+        const dbResultWithFreshState = {
+          ...dbResultWithOldState,
+          state: {
+            sqrtPriceX96: '2000000000000000000000000000', // NEW price
+            currentTick: 202000, // NEW tick
+            liquidity: '10000000000000000000000000', // NEW liquidity
+            feeGrowthGlobal0: '150000000000000000000',
+            feeGrowthGlobal1: '250000000000000000000',
+          },
+        };
+
+        // Mock: Pool exists with OLD state
+        prismaMock.pool.findFirst.mockResolvedValueOnce(dbResultWithOldState as any);
+
+        // Mock: Chain is supported
+        evmConfigMock.isChainSupported.mockReturnValue(true);
+        evmConfigMock.getPublicClient.mockReturnValue(
+          publicClientMock as unknown as PublicClient
+        );
+
+        // Mock: Read FRESH state from on-chain (different values)
+        publicClientMock.multicall.mockResolvedValueOnce([
+          [2000000000000000000000000000n, 202000], // slot0 (NEW values)
+          10000000000000000000000000n, // liquidity (NEW value)
+          150000000000000000000n, // feeGrowthGlobal0
+          250000000000000000000n, // feeGrowthGlobal1
+        ] as any);
+
+        // Mock: Update pool with fresh state
+        prismaMock.pool.update.mockResolvedValue(dbResultWithFreshState as any);
+
+        // Mock: Re-fetch pool after update returns FRESH state
+        prismaMock.pool.findUnique.mockResolvedValue(dbResultWithFreshState as any);
+        prismaMock.pool.findFirst.mockResolvedValue(dbResultWithFreshState as any);
+
+        // Execute
+        const result = await service.discover({
+          poolAddress: '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640',
+          chainId: 1,
+        });
+
+        // Verify result has FRESH state (not old state)
+        expect(result.state.sqrtPriceX96).toBe(2000000000000000000000000000n);
+        expect(result.state.currentTick).toBe(202000);
+        expect(result.state.liquidity).toBe(10000000000000000000000000n);
+
+        // Verify refresh was called (on-chain read + update)
+        expect(publicClientMock.multicall).toHaveBeenCalled();
+        expect(prismaMock.pool.update).toHaveBeenCalled();
       });
 
       it('should normalize address before lookup', async () => {
         const { dbResult } = USDC_WETH_POOL;
 
         // Mock: Pool exists
+        prismaMock.pool.findFirst.mockResolvedValueOnce(dbResult);
+
+        // Mock refresh behavior (required since discover now calls refresh)
+        evmConfigMock.isChainSupported.mockReturnValue(true);
+        evmConfigMock.getPublicClient.mockReturnValue(
+          publicClientMock as unknown as PublicClient
+        );
+        publicClientMock.multicall.mockResolvedValueOnce([
+          [1234567890123456789012345678n, 201234],
+          9876543210987654321098765n,
+          111111111111111111111n,
+          222222222222222222222n,
+        ] as any);
+        prismaMock.pool.update.mockResolvedValue(dbResult);
+        prismaMock.pool.findUnique.mockResolvedValue(dbResult);
         prismaMock.pool.findFirst.mockResolvedValue(dbResult);
 
         // Execute with lowercase address
@@ -242,7 +400,7 @@ describe('UniswapV3PoolService', () => {
           chainId: 1,
         });
 
-        // Verify address was normalized
+        // Verify address was normalized (check first call to findFirst)
         expect(prismaMock.pool.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
             where: expect.objectContaining({

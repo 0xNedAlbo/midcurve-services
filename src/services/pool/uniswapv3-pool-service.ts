@@ -245,13 +245,18 @@ export class UniswapV3PoolService extends PoolService<'uniswapv3'> {
             token0: existing.token0.symbol,
             token1: existing.token1.symbol,
           },
-          'Pool already exists, skipping on-chain discovery'
+          'Pool already exists, refreshing state from on-chain'
         );
+
+        // Refresh pool state to get current price/liquidity/tick
+        const refreshed = await this.refresh(existing.id);
+
         log.methodExit(this.logger, 'discover', {
-          id: existing.id,
+          id: refreshed.id,
           fromDatabase: true,
+          refreshed: true,
         });
-        return existing;
+        return refreshed;
       }
 
       // 4. Verify chain is supported
