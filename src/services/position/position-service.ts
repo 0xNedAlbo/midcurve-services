@@ -226,65 +226,6 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
   abstract reset(id: string): Promise<Position<P>>;
 
   // ============================================================================
-  // ABSTRACT QUERY METHOD
-  // Protocol implementations MUST implement this method
-  // ============================================================================
-
-  /**
-   * Find many positions with filtering and pagination
-   *
-   * Query positions for a specific user with optional filters.
-   * Each protocol defines its own filter options based on protocol-specific
-   * configuration fields (e.g., chainId for EVM chains).
-   *
-   * Common filters across all protocols:
-   * - userId (required) - User who owns the positions
-   * - status - Position status: 'active', 'closed', or 'all'
-   * - limit - Number of results to return (pagination)
-   * - offset - Number of results to skip (pagination)
-   *
-   * Protocol-specific filters:
-   * - Uniswap V3: chainId (filter by EVM chain ID from config JSON)
-   * - Future protocols: May have different filter options
-   *
-   * Implementation requirements:
-   * - MUST filter by protocol type (e.g., protocol = 'uniswapv3')
-   * - MUST filter by userId
-   * - SHOULD support status filter (active/closed/all via isActive field)
-   * - SHOULD support pagination (limit, offset)
-   * - SHOULD include full pool with token0/token1
-   * - SHOULD order by createdAt DESC
-   * - MUST return both positions array AND total count (for pagination)
-   *
-   * @param userId - User ID who owns the positions
-   * @param options - Query options (protocol-specific + common filters)
-   * @param options.status - Position status filter: 'active', 'closed', or 'all' (default: 'all')
-   * @param options.limit - Number of results to return (default: 20, max recommended: 100)
-   * @param options.offset - Number of results to skip (default: 0)
-   * @returns Object containing positions array and total count
-   *
-   * @example
-   * ```typescript
-   * // Uniswap V3 implementation
-   * const { positions, total } = await service.findMany(userId, {
-   *   chainId: 1,       // Protocol-specific: EVM chain ID
-   *   status: 'active', // Common: filter by active positions
-   *   limit: 20,        // Common: pagination
-   *   offset: 0         // Common: pagination
-   * });
-   * ```
-   */
-  abstract findMany(
-    userId: string,
-    options?: {
-      status?: 'active' | 'closed' | 'all';
-      limit?: number;
-      offset?: number;
-      [key: string]: unknown; // Allow protocol-specific options
-    }
-  ): Promise<{ positions: Position<P>[]; total: number }>;
-
-  // ============================================================================
   // CRUD OPERATIONS
   // Base implementations without protocol-specific validation
   // Protocol implementations SHOULD override to add type filtering

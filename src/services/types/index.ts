@@ -74,6 +74,9 @@ export type {
   PositionDiscoverInput,
 } from './position/index.js';
 
+// Position List input types
+export type { PositionListFilters, PositionListResult } from './position-list/index.js';
+
 // Position Ledger Event input types
 export type {
   CreatePositionLedgerEventInput,
