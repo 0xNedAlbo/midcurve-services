@@ -197,6 +197,34 @@ export abstract class PositionService<P extends keyof PositionConfigMap> {
    */
   abstract refresh(id: string): Promise<Position<P>>;
 
+  /**
+   * Reset position by rediscovering all ledger events from blockchain
+   *
+   * Completely rebuilds the position's ledger history by:
+   * 1. Deleting all existing ledger events and APR periods
+   * 2. Rediscovering all events from blockchain (via Etherscan or similar)
+   * 3. Recalculating APR periods from fresh events
+   * 4. Refreshing position state from on-chain data
+   * 5. Recalculating PnL fields based on fresh ledger data
+   *
+   * Use this when:
+   * - Ledger data may be corrupted or incomplete
+   * - Manual intervention is needed to rebuild position history
+   * - Testing or debugging position calculations
+   *
+   * Warning: This is a destructive operation that deletes existing event history.
+   * The blockchain is the source of truth, so events will be identical after rebuild,
+   * but database IDs and timestamps will change.
+   *
+   * @param id - Position ID
+   * @returns Position with completely rebuilt ledger and refreshed state
+   * @throws Error if position not found
+   * @throws Error if position is not the correct protocol
+   * @throws Error if chain is not supported
+   * @throws Error if blockchain data fetch fails
+   */
+  abstract reset(id: string): Promise<Position<P>>;
+
   // ============================================================================
   // ABSTRACT QUERY METHOD
   // Protocol implementations MUST implement this method

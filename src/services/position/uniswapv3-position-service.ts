@@ -1073,6 +1073,105 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     }
   }
 
+  /**
+   * Reset position by rediscovering all ledger events from blockchain
+   *
+   * Completely rebuilds the position's ledger history by:
+   * 1. Deleting all existing ledger events and APR periods
+   * 2. Rediscovering all events from Etherscan
+   * 3. Recalculating APR periods from fresh events
+   * 4. Refreshing position state from NFT contract
+   * 5. Recalculating PnL fields based on fresh ledger data
+   *
+   * Process:
+   * 1. Verify position exists
+   * 2. Delete all ledger events (cascades to APR periods)
+   * 3. Rediscover events from blockchain via ledgerService.discoverAllEvents()
+   * 4. Call refresh() to update position state and PnL
+   * 5. Return fully rebuilt position
+   *
+   * @param id - Position ID
+   * @returns Position with completely rebuilt ledger and refreshed state
+   * @throws Error if position not found
+   * @throws Error if position is not uniswapv3 protocol
+   * @throws Error if chain is not supported
+   * @throws Error if Etherscan fetch fails
+   */
+  override async reset(id: string): Promise<UniswapV3Position> {
+    log.methodEntry(this.logger, 'reset', { id });
+
+    try {
+      // 1. Verify position exists and get its config
+      const existingPosition = await this.findById(id);
+
+      if (!existingPosition) {
+        const error = new Error(`Position not found: ${id}`);
+        log.methodError(this.logger, 'reset', error, { id });
+        throw error;
+      }
+
+      this.logger.info(
+        {
+          positionId: id,
+          chainId: existingPosition.config.chainId,
+          nftId: existingPosition.config.nftId,
+        },
+        'Starting position reset - rediscovering ledger events from blockchain'
+      );
+
+      // 2. Rediscover all ledger events from blockchain
+      // This automatically:
+      // - Deletes existing events (via deleteAllItems in discoverAllEvents)
+      // - Fetches fresh events from Etherscan
+      // - Calculates PnL sequentially
+      // - Triggers APR period calculation
+      this.logger.info({ positionId: id }, 'Deleting old events and rediscovering from blockchain');
+
+      await this.ledgerService.discoverAllEvents(id);
+
+      this.logger.info(
+        { positionId: id },
+        'Ledger events rediscovered and APR periods recalculated'
+      );
+
+      // 3. Refresh position state from on-chain data
+      // This updates:
+      // - Position state (liquidity, fees, owner)
+      // - Current value
+      // - Unrealized PnL (using fresh cost basis from ledger)
+      // - Unclaimed fees
+      this.logger.info({ positionId: id }, 'Refreshing position state from on-chain data');
+
+      const refreshedPosition = await this.refresh(id);
+
+      this.logger.info(
+        {
+          positionId: id,
+          currentValue: refreshedPosition.currentValue.toString(),
+          costBasis: refreshedPosition.currentCostBasis.toString(),
+          realizedPnl: refreshedPosition.realizedPnl.toString(),
+          unrealizedPnl: refreshedPosition.unrealizedPnl.toString(),
+        },
+        'Position reset complete - ledger rebuilt and state refreshed'
+      );
+
+      log.methodExit(this.logger, 'reset', { id });
+      return refreshedPosition;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          (error.message.includes('not found') ||
+            error.message.includes('Chain'))
+        )
+      ) {
+        log.methodError(this.logger, 'reset', error as Error, { id });
+      }
+      throw error;
+    }
+  }
+
   // ============================================================================
   // CRUD OPERATIONS OVERRIDES
   // ============================================================================
