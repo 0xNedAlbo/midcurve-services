@@ -322,13 +322,18 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
             chainId,
             nftId,
           },
-          'Position already exists, skipping on-chain discovery'
+          'Position already exists, refreshing state from on-chain'
         );
+
+        // Refresh position state to get current on-chain values
+        const refreshed = await this.refresh(existing.id);
+
         log.methodExit(this.logger, 'discover', {
-          id: existing.id,
+          id: refreshed.id,
           fromDatabase: true,
+          refreshed: true,
         });
-        return existing;
+        return refreshed;
       }
 
       // 2. Validate quoteTokenAddress IF PROVIDED
