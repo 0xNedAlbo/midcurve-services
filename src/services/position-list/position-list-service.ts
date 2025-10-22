@@ -216,6 +216,7 @@ export class PositionListService {
     return {
       // Identity
       id: dbResult.id,
+      positionHash: dbResult.positionHash ?? '',
       createdAt: dbResult.createdAt,
       updatedAt: dbResult.updatedAt,
 

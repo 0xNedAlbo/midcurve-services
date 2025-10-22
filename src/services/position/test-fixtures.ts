@@ -220,6 +220,7 @@ export const ACTIVE_ETH_USDC_POSITION: PositionFixture = {
   },
   position: {
     id: 'position_001',
+    positionHash: 'uniswapv3/1/123456',
     createdAt: new Date('2024-06-01T00:00:00Z'),
     updatedAt: new Date('2024-06-01T00:00:00Z'),
     protocol: 'uniswapv3',
@@ -305,6 +306,7 @@ export const CLOSED_POSITION: PositionFixture = {
   },
   position: {
     id: 'position_002',
+    positionHash: 'uniswapv3/1/234567',
     createdAt: new Date('2024-03-01T00:00:00Z'),
     updatedAt: new Date('2024-05-01T00:00:00Z'),
     protocol: 'uniswapv3',
@@ -402,6 +404,7 @@ export const BOB_POSITION: PositionFixture = {
   },
   position: {
     id: 'position_003',
+    positionHash: 'uniswapv3/1/345678',
     createdAt: new Date('2024-06-15T00:00:00Z'),
     updatedAt: new Date('2024-06-15T00:00:00Z'),
     protocol: 'uniswapv3',
@@ -501,6 +504,7 @@ export const ARBITRUM_POSITION: PositionFixture = {
   },
   position: {
     id: 'position_004',
+    positionHash: 'uniswapv3/1/456789',
     createdAt: new Date('2024-06-20T00:00:00Z'),
     updatedAt: new Date('2024-06-20T00:00:00Z'),
     protocol: 'uniswapv3',
@@ -593,6 +597,7 @@ export const BASE_POSITION: PositionFixture = {
   },
   position: {
     id: 'position_005',
+    positionHash: 'uniswapv3/1/567890',
     createdAt: new Date('2024-04-01T00:00:00Z'),
     updatedAt: new Date('2024-06-01T00:00:00Z'),
     protocol: 'uniswapv3',

@@ -262,6 +262,27 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     };
   }
 
+  /**
+   * Create position hash for UniswapV3 positions
+   *
+   * Generates a human-readable composite key for fast database lookups.
+   * Format: "uniswapv3/{chainId}/{nftId}"
+   *
+   * Examples:
+   * - Ethereum position 123456: "uniswapv3/1/123456"
+   * - Arbitrum position 4865121: "uniswapv3/42161/4865121"
+   * - BSC position 789: "uniswapv3/56/789"
+   *
+   * This hash is unique across all UniswapV3 positions and enables
+   * fast indexed lookups instead of slow JSONB queries.
+   *
+   * @param config - UniswapV3 position configuration
+   * @returns Position hash string in format "uniswapv3/{chainId}/{nftId}"
+   */
+  override createPositionHash(config: UniswapV3PositionConfig): string {
+    return `uniswapv3/${config.chainId}/${config.nftId}`;
+  }
+
   // ============================================================================
   // ABSTRACT METHOD IMPLEMENTATIONS - DISCOVERY
   // ============================================================================
@@ -307,12 +328,17 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     });
 
     try {
-      // 1. Check database first (optimization)
-      const existing = await this.findByUserAndChainAndNftId(
-        userId,
+      // 1. Check database first using positionHash (fast indexed lookup)
+      // Generate hash with minimal config (chainId + nftId) - other fields not needed for lookup
+      const positionHash = this.createPositionHash({
         chainId,
-        nftId
-      );
+        nftId,
+        poolAddress: '0x0000000000000000000000000000000000000000', // Placeholder - not used in hash
+        tickLower: 0, // Placeholder - not used in hash
+        tickUpper: 0, // Placeholder - not used in hash
+      });
+
+      const existing = await this.findByPositionHash(userId, positionHash);
 
       if (existing) {
         this.logger.info(
@@ -321,8 +347,9 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
             userId,
             chainId,
             nftId,
+            positionHash,
           },
-          'Position already exists, refreshing state from on-chain'
+          'Position already exists (found via positionHash), refreshing state from on-chain'
         );
 
         // Refresh position state to get current on-chain values
@@ -819,23 +846,48 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   // ============================================================================
 
   /**
-   * Refresh position state from on-chain NFT data
+   * Refresh position state from ledger and on-chain data
    *
-   * Fetches the current position state from the NonfungiblePositionManager contract
-   * and updates the database.
+   * Updates position state by combining data from multiple sources:
+   * - **Liquidity**: From ledger events (source of truth for liquidity changes)
+   * - **Fees & Owner**: From on-chain NFT contract (only for positions with L > 0)
+   * - **Position Status**: Detects and marks fully closed positions
+   *
+   * For closed positions (liquidity = 0):
+   * - Skips on-chain call entirely (no fees to track for L=0)
+   * - Uses last known fee growth values with tokensOwed set to 0
+   * - Prevents "Invalid token ID" errors for burned NFTs
+   * - Checks if position is fully closed (final COLLECT with all principal withdrawn)
+   * - If fully closed: Sets isActive=false and positionClosedAt to timestamp of final COLLECT event
+   *
+   * For active positions (liquidity > 0):
+   * - Fetches current fee data from NonfungiblePositionManager
+   * - Updates feeGrowthInside0/1LastX128, tokensOwed0/1, and ownerAddress
+   *
+   * Close Detection:
+   * - Position is marked as closed only when ALL conditions are met:
+   *   1. Liquidity = 0 (all liquidity removed)
+   *   2. Last ledger event is COLLECT (tokens withdrawn)
+   *   3. All principal collected (uncollectedPrincipal0After = 0 && uncollectedPrincipal1After = 0)
+   * - This prevents false positives where L=0 after DECREASE but awaiting final COLLECT
    *
    * Updates:
-   * - Mutable state fields (liquidity, feeGrowthInside0/1LastX128, tokensOwed0/1, ownerAddress)
+   * - liquidity (from ledger events)
+   * - feeGrowthInside0/1LastX128 (from on-chain, only if L > 0)
+   * - tokensOwed0/1 (from on-chain, only if L > 0)
+   * - ownerAddress (from on-chain, only if L > 0)
+   * - isActive (set to false if position is fully closed)
+   * - positionClosedAt (set to timestamp of final COLLECT event if position is fully closed)
    *
    * Note: Config fields (chainId, nftId, ticks, poolAddress) are immutable and not updated.
    * Note: PnL fields and fees are NOT recalculated in this implementation.
    *
    * @param id - Position ID
-   * @returns Updated position with fresh on-chain state
+   * @returns Updated position with fresh state
    * @throws Error if position not found
    * @throws Error if position is not uniswapv3 protocol
    * @throws Error if chain is not supported
-   * @throws Error if on-chain read fails
+   * @throws Error if on-chain read fails (only for L > 0 positions)
    */
   override async refresh(id: string): Promise<UniswapV3Position> {
     log.methodEntry(this.logger, 'refresh', { id });
@@ -886,81 +938,142 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Reading fresh position state from NonfungiblePositionManager'
       );
 
-      const [positionData, ownerAddress] = await Promise.all([
-        client.readContract({
-          address: positionManagerAddress,
-          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
-          functionName: 'positions',
-          args: [BigInt(nftId)],
-        }) as Promise<
-          readonly [
-            bigint,
-            Address,
-            Address,
-            Address,
-            number,
-            number,
-            number,
-            bigint,
-            bigint,
-            bigint,
-            bigint,
-            bigint,
-          ]
-        >,
-        client.readContract({
-          address: positionManagerAddress,
-          abi: UNISWAP_V3_POSITION_MANAGER_ABI,
-          functionName: 'ownerOf',
-          args: [BigInt(nftId)],
-        }) as Promise<Address>,
-      ]);
-
-      // Parse position data
-      const position: UniswapV3PositionData = {
-        nonce: positionData[0],
-        operator: positionData[1],
-        token0: positionData[2],
-        token1: positionData[3],
-        fee: positionData[4],
-        tickLower: positionData[5],
-        tickUpper: positionData[6],
-        liquidity: positionData[7],
-        feeGrowthInside0LastX128: positionData[8],
-        feeGrowthInside1LastX128: positionData[9],
-        tokensOwed0: positionData[10],
-        tokensOwed1: positionData[11],
-      };
-
+      // 3. Get current liquidity from ledger (source of truth)
       this.logger.debug(
-        {
-          id,
-          liquidity: position.liquidity.toString(),
-          tokensOwed0: position.tokensOwed0.toString(),
-          tokensOwed1: position.tokensOwed1.toString(),
-          owner: ownerAddress,
-        },
-        'Fresh position state read from contract'
+        { id, chainId, nftId },
+        'Fetching current liquidity from ledger events'
       );
 
-      // 4. Create updated state object
-      const updatedState: UniswapV3PositionState = {
-        ownerAddress: normalizeAddress(ownerAddress),
-        liquidity: position.liquidity,
-        feeGrowthInside0LastX128: position.feeGrowthInside0LastX128,
-        feeGrowthInside1LastX128: position.feeGrowthInside1LastX128,
-        tokensOwed0: position.tokensOwed0,
-        tokensOwed1: position.tokensOwed1,
-      };
+      const currentLiquidity = await this.getCurrentLiquidityFromLedger(id);
 
       this.logger.debug(
-        {
-          id,
-          ownerAddress: updatedState.ownerAddress,
-          liquidity: updatedState.liquidity.toString(),
-        },
-        'Updated state object created from on-chain data'
+        { id, liquidity: currentLiquidity.toString() },
+        'Current liquidity retrieved from ledger'
       );
+
+      // 4. Determine if on-chain refresh is needed
+      // For closed positions (L=0), skip on-chain call as there are no fees to track
+      let updatedState: UniswapV3PositionState;
+
+      if (currentLiquidity === 0n) {
+        this.logger.info(
+          { id, chainId, nftId },
+          'Position has zero liquidity, skipping on-chain refresh (no fees to track)'
+        );
+
+        // Use existing state values but with liquidity from ledger
+        updatedState = {
+          ownerAddress: existingPosition.state.ownerAddress,
+          liquidity: 0n,
+          feeGrowthInside0LastX128: existingPosition.state.feeGrowthInside0LastX128,
+          feeGrowthInside1LastX128: existingPosition.state.feeGrowthInside1LastX128,
+          tokensOwed0: 0n,  // No unclaimed fees for L=0 positions
+          tokensOwed1: 0n,  // No unclaimed fees for L=0 positions
+        };
+
+        this.logger.debug(
+          { id, liquidity: '0' },
+          'State updated with zero liquidity from ledger, on-chain call skipped'
+        );
+
+        // Check if position should be marked as closed
+        if (existingPosition.isActive) {
+          const closedAt = await this.getPositionCloseTimestamp(id);
+          if (closedAt) {
+            this.logger.info(
+              { id, chainId, nftId, closedAt },
+              'Marking position as closed (L=0 with final COLLECT event)'
+            );
+
+            await this.prisma.position.update({
+              where: { id },
+              data: {
+                isActive: false,
+                positionClosedAt: closedAt,
+              },
+            });
+
+            this.logger.info(
+              { id, closedAt },
+              'Position marked as closed successfully'
+            );
+          } else {
+            this.logger.debug(
+              { id },
+              'Position has L=0 but is not fully closed (awaiting final COLLECT or has uncollected principal)'
+            );
+          }
+        }
+      } else {
+        // 5. Position has liquidity - fetch fee data from on-chain
+        this.logger.debug(
+          { id, liquidity: currentLiquidity.toString() },
+          'Position has liquidity, reading fee data from NonfungiblePositionManager'
+        );
+
+        const [positionData, ownerAddress] = await Promise.all([
+          client.readContract({
+            address: positionManagerAddress,
+            abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+            functionName: 'positions',
+            args: [BigInt(nftId)],
+          }) as Promise<
+            readonly [
+              bigint,    // nonce
+              Address,   // operator
+              Address,   // token0
+              Address,   // token1
+              number,    // fee
+              number,    // tickLower
+              number,    // tickUpper
+              bigint,    // liquidity (IGNORED - use ledger value)
+              bigint,    // feeGrowthInside0LastX128
+              bigint,    // feeGrowthInside1LastX128
+              bigint,    // tokensOwed0
+              bigint,    // tokensOwed1
+            ]
+          >,
+          client.readContract({
+            address: positionManagerAddress,
+            abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+            functionName: 'ownerOf',
+            args: [BigInt(nftId)],
+          }) as Promise<Address>,
+        ]);
+
+        this.logger.debug(
+          {
+            id,
+            feeGrowthInside0LastX128: positionData[8].toString(),
+            feeGrowthInside1LastX128: positionData[9].toString(),
+            tokensOwed0: positionData[10].toString(),
+            tokensOwed1: positionData[11].toString(),
+            owner: ownerAddress,
+          },
+          'Fee data and owner read from on-chain'
+        );
+
+        // Create updated state: ledger liquidity + on-chain fee data
+        updatedState = {
+          ownerAddress: normalizeAddress(ownerAddress),
+          liquidity: currentLiquidity,  // From ledger, NOT on-chain
+          feeGrowthInside0LastX128: positionData[8],
+          feeGrowthInside1LastX128: positionData[9],
+          tokensOwed0: positionData[10],
+          tokensOwed1: positionData[11],
+        };
+
+        this.logger.debug(
+          {
+            id,
+            ownerAddress: updatedState.ownerAddress,
+            liquidity: updatedState.liquidity.toString(),
+            liquiditySource: 'ledger',
+            feesSource: 'on-chain',
+          },
+          'State updated with liquidity from ledger and fees from on-chain'
+        );
+      }
 
       // 5. Update database with new state
       const stateDB = this.serializeState(updatedState);
@@ -1199,12 +1312,9 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     });
 
     try {
-      // Check for existing position by userId + chainId + nftId
-      const existing = await this.findByUserAndChainAndNftId(
-        input.userId,
-        input.config.chainId,
-        input.config.nftId
-      );
+      // Check for existing position by positionHash (fast indexed lookup)
+      const positionHash = this.createPositionHash(input.config);
+      const existing = await this.findByPositionHash(input.userId, positionHash);
 
       if (existing) {
         this.logger.info(
@@ -1213,6 +1323,7 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
             userId: input.userId,
             chainId: input.config.chainId,
             nftId: input.config.nftId,
+            positionHash,
           },
           'Position already exists, returning existing position'
         );
@@ -1700,59 +1811,106 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
   // ============================================================================
 
   /**
-   * Find position by user ID, chain ID, and NFT ID
+   * Get current liquidity from the most recent ledger event
    *
-   * Used for duplicate checking during position creation and discovery.
+   * The ledger is the source of truth for liquidity as it tracks all INCREASE/DECREASE events.
+   * This method queries the last ledger event's `liquidityAfter` field to determine the
+   * current liquidity state without making on-chain calls.
    *
-   * @param userId - User ID who owns the position
-   * @param chainId - Chain ID where the position is deployed
-   * @param nftId - NFT token ID representing the position
-   * @returns Position if found, null otherwise
+   * @param positionId - Position ID
+   * @returns Current liquidity (0n if no events exist or position is closed)
    */
-  private async findByUserAndChainAndNftId(
-    userId: string,
-    chainId: number,
-    nftId: number
-  ): Promise<UniswapV3Position | null> {
-    log.dbOperation(this.logger, 'findFirst', 'Position', {
-      userId,
-      chainId,
-      nftId,
-      protocol: 'uniswapv3',
+  private async getCurrentLiquidityFromLedger(positionId: string): Promise<bigint> {
+    const lastEvent = await this.prisma.positionLedgerEvent.findFirst({
+      where: { positionId },
+      orderBy: { timestamp: 'desc' },
+      select: { config: true },
     });
 
-    const result = await this.prisma.position.findFirst({
-      where: {
-        protocol: 'uniswapv3',
-        userId,
-        // Query config JSON field for chainId and nftId
-        config: {
-          path: ['chainId'],
-          equals: chainId,
-        },
-      },
-      include: {
-        pool: {
-          include: {
-            token0: true,
-            token1: true,
-          },
-        },
-      },
-    });
-
-    if (!result) {
-      return null;
+    if (!lastEvent) {
+      // No events yet, position has no liquidity
+      this.logger.debug({ positionId }, 'No ledger events found, returning liquidity = 0');
+      return 0n;
     }
 
-    // Parse config to verify nftId matches (additional safeguard)
-    const config = this.parseConfig(result.config);
-    if (config.nftId !== nftId) {
-      return null;
-    }
+    // Parse the config to get liquidityAfter
+    const config = lastEvent.config as { liquidityAfter?: string };
+    const liquidityAfter = config.liquidityAfter ? BigInt(config.liquidityAfter) : 0n;
 
-    // Map to UniswapV3Position
-    const position = this.mapToPosition(result as any);
-    return position as UniswapV3Position;
+    this.logger.debug(
+      { positionId, liquidityAfter: liquidityAfter.toString() },
+      'Retrieved liquidity from last ledger event'
+    );
+
+    return liquidityAfter;
   }
+
+  /**
+   * Get position close timestamp if position is fully closed
+   *
+   * A position is considered fully closed when:
+   * 1. Liquidity = 0 (all liquidity removed)
+   * 2. Last event is COLLECT (tokens withdrawn)
+   * 3. All principal collected (uncollectedPrincipal0After = 0 && uncollectedPrincipal1After = 0)
+   *
+   * This prevents false positives where a position has L=0 after DECREASE_LIQUIDITY
+   * but is still waiting for the final COLLECT event.
+   *
+   * @param positionId - Position ID
+   * @returns Timestamp of the closing COLLECT event, or null if position is not fully closed
+   */
+  private async getPositionCloseTimestamp(positionId: string): Promise<Date | null> {
+    const lastEvent = await this.prisma.positionLedgerEvent.findFirst({
+      where: { positionId },
+      orderBy: { timestamp: 'desc' },
+      select: { eventType: true, timestamp: true, config: true },
+    });
+
+    if (!lastEvent) {
+      this.logger.debug({ positionId }, 'No ledger events found, position not closed');
+      return null;
+    }
+
+    // Position is only closed if last event is COLLECT
+    if (lastEvent.eventType !== 'COLLECT') {
+      this.logger.debug(
+        { positionId, lastEventType: lastEvent.eventType },
+        'Last event is not COLLECT, position not closed'
+      );
+      return null;
+    }
+
+    // Check if all principal has been collected
+    const config = lastEvent.config as {
+      uncollectedPrincipal0After?: string;
+      uncollectedPrincipal1After?: string;
+    };
+
+    const uncollectedPrincipal0After = config.uncollectedPrincipal0After
+      ? BigInt(config.uncollectedPrincipal0After)
+      : 0n;
+    const uncollectedPrincipal1After = config.uncollectedPrincipal1After
+      ? BigInt(config.uncollectedPrincipal1After)
+      : 0n;
+
+    // Position is only fully closed if all principal has been collected
+    if (uncollectedPrincipal0After === 0n && uncollectedPrincipal1After === 0n) {
+      this.logger.debug(
+        { positionId, closedAt: lastEvent.timestamp },
+        'Position is fully closed (final COLLECT with all principal withdrawn)'
+      );
+      return lastEvent.timestamp;
+    }
+
+    this.logger.debug(
+      {
+        positionId,
+        uncollectedPrincipal0After: uncollectedPrincipal0After.toString(),
+        uncollectedPrincipal1After: uncollectedPrincipal1After.toString(),
+      },
+      'Position has uncollected principal, not fully closed'
+    );
+    return null;
+  }
+
 }
