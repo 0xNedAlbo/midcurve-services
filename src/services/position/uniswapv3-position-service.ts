@@ -641,14 +641,36 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         'Position discovered and created'
       );
 
-      // 11. Calculate and update common fields
+      // 11. Discover ledger events from blockchain
+      try {
+        this.logger.info(
+          { positionId: createdPosition.id },
+          'Discovering ledger events from blockchain'
+        );
+
+        // Discover all events (automatically triggers APR calculation)
+        await this.ledgerService.discoverAllEvents(createdPosition.id);
+
+        this.logger.info(
+          { positionId: createdPosition.id },
+          'Ledger events discovered successfully'
+        );
+      } catch (error) {
+        this.logger.warn(
+          { error, positionId: createdPosition.id },
+          'Failed to discover ledger events, position will have zero PnL'
+        );
+        // Continue - position exists but PnL will be stale
+      }
+
+      // 12. Calculate and update common fields
       try {
         this.logger.debug(
           { positionId: createdPosition.id },
           'Calculating position common fields'
         );
 
-        // Get ledger summary (cost basis, realized PnL, fees)
+        // Get ledger summary (now has real data from events discovered above)
         const ledgerSummary = await this.getLedgerSummary(createdPosition.id);
 
         // Calculate current position value
