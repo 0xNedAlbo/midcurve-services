@@ -16,6 +16,7 @@ import type {
   UniswapV3PositionDiscoverInput,
   CreatePositionInput,
 } from '../types/position/position-input.js';
+import type { CreateUniswapV3LedgerEventInput } from '../types/position-ledger/position-ledger-event-input.js';
 import { PositionService } from './position-service.js';
 import { log } from '../../logging/index.js';
 import { EvmConfig } from '../../config/evm.js';
@@ -1280,6 +1281,507 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
         )
       ) {
         log.methodError(this.logger, 'reset', error as Error, { id });
+      }
+      throw error;
+    }
+  }
+
+  // ============================================================================
+  // USER-PROVIDED DATA CREATION
+  // ============================================================================
+
+  /**
+   * Create a Uniswap V3 position from user-provided data
+   *
+   * This method allows users to manually create a position after sending an
+   * INCREASE_LIQUIDITY transaction on-chain. The user provides event data from
+   * the transaction receipt, and the service creates the position with full
+   * financial tracking via ledger events.
+   *
+   * Process:
+   * 1. Check for existing position (idempotent)
+   * 2. Discover/fetch pool
+   * 3. Determine quote token (explicit or auto-detect)
+   * 4. Create position with user-provided config and derived state
+   * 5. Fetch historic pool price at event blockNumber
+   * 6. Create INCREASE_POSITION ledger event with financial calculations
+   * 7. Calculate and update position common fields
+   * 8. Return fully populated position
+   *
+   * Minimizes on-chain calls:
+   * - Pool discovery (if not cached)
+   * - Historic pool price at blockNumber
+   *
+   * @param userId - User ID who owns this position
+   * @param chainId - EVM chain ID where position exists
+   * @param nftId - NFT token ID
+   * @param input - User-provided position data and INCREASE_LIQUIDITY event
+   * @returns The created position with full financial tracking
+   * @throws Error if pool not found, chain not supported, or addresses invalid
+   */
+  async createPositionFromUserData(
+    userId: string,
+    chainId: number,
+    nftId: number,
+    input: {
+      poolAddress: string;
+      tickUpper: number;
+      tickLower: number;
+      ownerAddress: string;
+      quoteTokenAddress?: string;
+      increaseEvent: {
+        timestamp: Date;
+        blockNumber: bigint;
+        transactionIndex: number;
+        logIndex: number;
+        transactionHash: string;
+        liquidity: bigint;
+        amount0: bigint;
+        amount1: bigint;
+      };
+    }
+  ): Promise<UniswapV3Position> {
+    log.methodEntry(this.logger, 'createPositionFromUserData', {
+      userId,
+      chainId,
+      nftId,
+    });
+
+    try {
+      // 1. Check if position already exists (idempotent)
+      const positionHash = this.createPositionHash({
+        chainId,
+        nftId,
+        poolAddress: input.poolAddress,
+        tickLower: input.tickLower,
+        tickUpper: input.tickUpper,
+      });
+
+      const existing = await this.findByPositionHash(userId, positionHash);
+
+      if (existing) {
+        this.logger.info(
+          {
+            id: existing.id,
+            userId,
+            chainId,
+            nftId,
+            positionHash,
+          },
+          'Position already exists, returning existing position'
+        );
+        log.methodExit(this.logger, 'createPositionFromUserData', {
+          id: existing.id,
+          duplicate: true,
+        });
+        return existing;
+      }
+
+      // 2. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(chainId)) {
+        const error = new Error(
+          `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+            .getSupportedChainIds()
+            .join(', ')}`
+        );
+        log.methodError(this.logger, 'createPositionFromUserData', error, {
+          chainId,
+        });
+        throw error;
+      }
+
+      // 3. Validate and normalize addresses
+      if (!isValidAddress(input.poolAddress)) {
+        const error = new Error(`Invalid pool address format: ${input.poolAddress}`);
+        log.methodError(this.logger, 'createPositionFromUserData', error, {
+          poolAddress: input.poolAddress,
+        });
+        throw error;
+      }
+
+      if (!isValidAddress(input.ownerAddress)) {
+        const error = new Error(`Invalid owner address format: ${input.ownerAddress}`);
+        log.methodError(this.logger, 'createPositionFromUserData', error, {
+          ownerAddress: input.ownerAddress,
+        });
+        throw error;
+      }
+
+      const poolAddress = normalizeAddress(input.poolAddress);
+      const ownerAddress = normalizeAddress(input.ownerAddress);
+
+      let normalizedQuoteAddress: string | undefined;
+      if (input.quoteTokenAddress) {
+        if (!isValidAddress(input.quoteTokenAddress)) {
+          const error = new Error(
+            `Invalid quote token address format: ${input.quoteTokenAddress}`
+          );
+          log.methodError(this.logger, 'createPositionFromUserData', error, {
+            quoteTokenAddress: input.quoteTokenAddress,
+          });
+          throw error;
+        }
+        normalizedQuoteAddress = normalizeAddress(input.quoteTokenAddress);
+      }
+
+      this.logger.debug(
+        {
+          poolAddress,
+          ownerAddress,
+          quoteTokenAddress: normalizedQuoteAddress ?? 'auto-detect',
+        },
+        'Addresses validated and normalized'
+      );
+
+      // 4. Discover pool
+      const pool = await this.poolService.discover({
+        poolAddress,
+        chainId,
+      });
+
+      this.logger.debug(
+        {
+          poolId: pool.id,
+          token0: pool.token0.symbol,
+          token1: pool.token1.symbol,
+        },
+        'Pool discovered/fetched'
+      );
+
+      // 5. Determine quote token
+      let isToken0Quote: boolean;
+
+      if (normalizedQuoteAddress) {
+        // EXPLICIT MODE: User provided quoteTokenAddress
+        const token0Matches =
+          compareAddresses(pool.token0.config.address, normalizedQuoteAddress) === 0;
+        const token1Matches =
+          compareAddresses(pool.token1.config.address, normalizedQuoteAddress) === 0;
+
+        if (!token0Matches && !token1Matches) {
+          const error = new Error(
+            `Quote token address ${normalizedQuoteAddress} does not match either pool token. ` +
+              `Pool token0: ${pool.token0.config.address}, token1: ${pool.token1.config.address}`
+          );
+          log.methodError(this.logger, 'createPositionFromUserData', error, {
+            quoteTokenAddress: normalizedQuoteAddress,
+            poolToken0: pool.token0.config.address,
+            poolToken1: pool.token1.config.address,
+          });
+          throw error;
+        }
+
+        isToken0Quote = token0Matches;
+
+        this.logger.debug(
+          {
+            isToken0Quote,
+            quoteToken: isToken0Quote ? pool.token0.symbol : pool.token1.symbol,
+          },
+          'Quote token determined from caller input'
+        );
+      } else {
+        // AUTO-DETECT MODE: Use QuoteTokenService
+        this.logger.debug('Auto-detecting quote token using QuoteTokenService');
+
+        const quoteResult = await this.quoteTokenService.determineQuoteToken({
+          userId,
+          chainId,
+          token0Address: pool.token0.config.address,
+          token1Address: pool.token1.config.address,
+        });
+
+        isToken0Quote = quoteResult.isToken0Quote;
+
+        this.logger.debug(
+          {
+            isToken0Quote,
+            quoteToken: isToken0Quote ? pool.token0.symbol : pool.token1.symbol,
+            matchedBy: quoteResult.matchedBy,
+          },
+          'Quote token auto-detected'
+        );
+      }
+
+      const baseToken = isToken0Quote ? pool.token1 : pool.token0;
+      const quoteToken = isToken0Quote ? pool.token0 : pool.token1;
+
+      this.logger.debug(
+        {
+          isToken0Quote,
+          baseToken: baseToken.symbol,
+          quoteToken: quoteToken.symbol,
+        },
+        'Token roles determined'
+      );
+
+      // 6. Create position config
+      const config: UniswapV3PositionConfig = {
+        chainId,
+        nftId,
+        poolAddress,
+        tickUpper: input.tickUpper,
+        tickLower: input.tickLower,
+      };
+
+      // 7. Create position state from user input + defaults
+      const state: UniswapV3PositionState = {
+        ownerAddress,
+        liquidity: input.increaseEvent.liquidity,
+        feeGrowthInside0LastX128: 0n, // New position
+        feeGrowthInside1LastX128: 0n, // New position
+        tokensOwed0: 0n, // New position
+        tokensOwed1: 0n, // New position
+      };
+
+      this.logger.debug(
+        {
+          ownerAddress: state.ownerAddress,
+          liquidity: state.liquidity.toString(),
+        },
+        'Position state initialized from user input'
+      );
+
+      // 8. Create position via create() method
+      const createdPosition = await this.create({
+        protocol: 'uniswapv3',
+        positionType: 'CL_TICKS',
+        userId,
+        poolId: pool.id,
+        isToken0Quote,
+        config,
+        state,
+      });
+
+      this.logger.info(
+        {
+          id: createdPosition.id,
+          userId,
+          chainId,
+          nftId,
+          poolId: pool.id,
+          baseToken: baseToken.symbol,
+          quoteToken: quoteToken.symbol,
+        },
+        'Position created in database'
+      );
+
+      // 9. Fetch historic pool price at event blockNumber
+      this.logger.debug(
+        {
+          positionId: createdPosition.id,
+          blockNumber: input.increaseEvent.blockNumber.toString(),
+        },
+        'Fetching historic pool price at event blockNumber'
+      );
+
+      const poolPriceService = new (await import('../pool-price/uniswapv3-pool-price-service.js')).UniswapV3PoolPriceService({
+        prisma: this.prisma,
+      });
+
+      const poolPrice = await poolPriceService.discover(pool.id, {
+        blockNumber: Number(input.increaseEvent.blockNumber),
+      });
+
+      this.logger.debug(
+        {
+          positionId: createdPosition.id,
+          sqrtPriceX96: poolPrice.state.sqrtPriceX96.toString(),
+        },
+        'Historic pool price fetched'
+      );
+
+      // 10. Calculate pool price (quote per base) from historic sqrtPriceX96
+      const quoteDecimals = BigInt(quoteToken.decimals);
+      const baseDecimals = BigInt(baseToken.decimals);
+      const sqrtPriceX96 = poolPrice.state.sqrtPriceX96;
+
+      let poolPriceValue: bigint;
+      if (isToken0Quote) {
+        // token0 = quote, token1 = base
+        // price = token0 per token1 = Q192 / (sqrtPriceX96^2)
+        poolPriceValue = (2n ** 192n) / (sqrtPriceX96 * sqrtPriceX96);
+        // Scale to quote decimals
+        poolPriceValue = (poolPriceValue * (10n ** quoteDecimals)) / (10n ** baseDecimals);
+      } else {
+        // token0 = base, token1 = quote
+        // price = token1 per token0 = (sqrtPriceX96^2) / Q192
+        poolPriceValue = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
+        // Scale to quote decimals
+        poolPriceValue = (poolPriceValue * (10n ** quoteDecimals)) / (10n ** baseDecimals);
+      }
+
+      this.logger.debug(
+        {
+          positionId: createdPosition.id,
+          poolPrice: poolPriceValue.toString(),
+          quoteToken: quoteToken.symbol,
+          baseToken: baseToken.symbol,
+        },
+        'Pool price calculated from historic sqrtPriceX96'
+      );
+
+      // 11. Calculate token value in quote units
+      const token0Amount = input.increaseEvent.amount0;
+      const token1Amount = input.increaseEvent.amount1;
+
+      let tokenValue: bigint;
+      if (isToken0Quote) {
+        // token0 = quote, token1 = base
+        // Value = amount0 + (amount1 * poolPrice)
+        const token1InQuote = (token1Amount * poolPriceValue) / (10n ** baseDecimals);
+        tokenValue = token0Amount + token1InQuote;
+      } else {
+        // token0 = base, token1 = quote
+        // Value = (amount0 * poolPrice) + amount1
+        const token0InQuote = (token0Amount * poolPriceValue) / (10n ** baseDecimals);
+        tokenValue = token0InQuote + token1Amount;
+      }
+
+      this.logger.debug(
+        {
+          positionId: createdPosition.id,
+          tokenValue: tokenValue.toString(),
+        },
+        'Token value calculated in quote units'
+      );
+
+      // 12. Create INCREASE_POSITION ledger event
+      this.logger.debug(
+        { positionId: createdPosition.id },
+        'Creating INCREASE_POSITION ledger event'
+      );
+
+      const ledgerEventInput: CreateUniswapV3LedgerEventInput = {
+        positionId: createdPosition.id,
+        protocol: 'uniswapv3',
+        previousId: null, // First event
+        timestamp: input.increaseEvent.timestamp,
+        eventType: 'INCREASE_POSITION',
+        inputHash: '', // Will be generated by addItem
+        poolPrice: poolPriceValue,
+        token0Amount,
+        token1Amount,
+        tokenValue,
+        rewards: [], // No fees collected
+        deltaCostBasis: tokenValue, // Initial capital
+        costBasisAfter: tokenValue,
+        deltaPnl: 0n, // No PnL on open
+        pnlAfter: 0n,
+        config: {
+          chainId,
+          nftId: BigInt(nftId),
+          blockNumber: input.increaseEvent.blockNumber,
+          txIndex: input.increaseEvent.transactionIndex,
+          logIndex: input.increaseEvent.logIndex,
+          txHash: input.increaseEvent.transactionHash,
+          deltaL: input.increaseEvent.liquidity, // Liquidity added
+          liquidityAfter: input.increaseEvent.liquidity, // Total liquidity
+          feesCollected0: 0n, // No fees on INCREASE
+          feesCollected1: 0n,
+          uncollectedPrincipal0After: 0n, // No principal yet
+          uncollectedPrincipal1After: 0n,
+          sqrtPriceX96, // Historic price
+        },
+        state: {
+          eventType: 'INCREASE_LIQUIDITY',
+          tokenId: BigInt(nftId),
+          liquidity: input.increaseEvent.liquidity,
+          amount0: token0Amount,
+          amount1: token1Amount,
+        },
+      };
+
+      await this.ledgerService.addItem(createdPosition.id, ledgerEventInput);
+
+      this.logger.info(
+        {
+          positionId: createdPosition.id,
+          eventType: 'INCREASE_POSITION',
+          tokenValue: tokenValue.toString(),
+        },
+        'Ledger event created'
+      );
+
+      // 13. Calculate and update position common fields
+      this.logger.debug(
+        { positionId: createdPosition.id },
+        'Calculating position common fields'
+      );
+
+      // Get ledger summary (cost basis, PnL, fees)
+      const ledgerSummary = await this.getLedgerSummary(createdPosition.id);
+
+      // Calculate current position value (using current pool price, not historic)
+      const currentValue = this.calculateCurrentPositionValue(
+        createdPosition,
+        pool
+      );
+
+      // Calculate unrealized PnL
+      const unrealizedPnl = currentValue - ledgerSummary.costBasis;
+
+      // Calculate unclaimed fees
+      const unClaimedFees = await this.calculateUnclaimedFees(
+        createdPosition,
+        pool
+      );
+
+      // Calculate price range
+      const { priceRangeLower, priceRangeUpper } = this.calculatePriceRange(
+        createdPosition,
+        pool
+      );
+
+      // Update position with calculated fields
+      await this.updatePositionCommonFields(createdPosition.id, {
+        currentValue,
+        currentCostBasis: ledgerSummary.costBasis,
+        realizedPnl: ledgerSummary.realizedPnl,
+        unrealizedPnl,
+        collectedFees: ledgerSummary.collectedFees,
+        unClaimedFees,
+        lastFeesCollectedAt: ledgerSummary.lastFeesCollectedAt.getTime() === 0
+          ? createdPosition.positionOpenedAt
+          : ledgerSummary.lastFeesCollectedAt,
+        priceRangeLower,
+        priceRangeUpper,
+      });
+
+      this.logger.info(
+        {
+          positionId: createdPosition.id,
+          currentValue: currentValue.toString(),
+          costBasis: ledgerSummary.costBasis.toString(),
+          unrealizedPnl: unrealizedPnl.toString(),
+        },
+        'Position common fields calculated and updated'
+      );
+
+      log.methodExit(this.logger, 'createPositionFromUserData', {
+        id: createdPosition.id,
+        duplicate: false,
+      });
+
+      // Re-fetch position with updated fields
+      const finalPosition = await this.findById(createdPosition.id);
+      return finalPosition ?? createdPosition;
+    } catch (error) {
+      // Only log if not already logged
+      if (
+        !(
+          error instanceof Error &&
+          (error.message.includes('Invalid') ||
+            error.message.includes('Chain') ||
+            error.message.includes('Quote token') ||
+            error.message.includes('already exists'))
+        )
+      ) {
+        log.methodError(this.logger, 'createPositionFromUserData', error as Error, {
+          userId,
+          chainId,
+          nftId,
+        });
       }
       throw error;
     }
