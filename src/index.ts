@@ -33,6 +33,7 @@ export * from './services/pool/index.js';
 export * from './services/pool-price/index.js';
 export * from './services/position/index.js';
 export * from './services/position-list/index.js';
+export * from './services/position-ledger/index.js';
 export * from './services/position-apr/index.js';
 export * from './services/quote-token/index.js';
 export * from './services/pool-discovery/index.js';
