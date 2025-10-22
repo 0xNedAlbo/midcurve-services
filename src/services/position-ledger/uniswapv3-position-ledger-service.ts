@@ -640,6 +640,337 @@ export class UniswapV3PositionLedgerService extends PositionLedgerService<'unisw
     };
   }
 
+  // ============================================================================
+  // USER-PROVIDED EVENT ADDITION
+  // ============================================================================
+
+  /**
+   * Add events to position ledger from user-provided data
+   *
+   * This method allows users to manually add events to their position's ledger
+   * after executing on-chain transactions. Events are validated for ordering,
+   * processed with historic pool prices, and financial calculations are performed.
+   *
+   * Process:
+   * 1. Fetch position and pool metadata
+   * 2. Get existing ledger events and latest state
+   * 3. Validate new events come AFTER existing events
+   * 4. Sort new events by blockchain order
+   * 5. Process each event sequentially:
+   *    - Fetch historic pool price at blockNumber
+   *    - Build ledger event with financial calculations
+   *    - Add event to database
+   *    - Update state for next event
+   *
+   * @param positionId - Position database ID
+   * @param events - Array of user-provided events from transaction receipts
+   * @throws Error if position not found, events out of order, or pool price fetch fails
+   */
+  async addEventsFromUserData(
+    positionId: string,
+    events: Array<{
+      eventType: 'INCREASE_LIQUIDITY' | 'DECREASE_LIQUIDITY' | 'COLLECT';
+      timestamp: Date;
+      blockNumber: bigint;
+      transactionIndex: number;
+      logIndex: number;
+      transactionHash: string;
+      tokenId: bigint;
+      liquidity?: bigint;
+      amount0: bigint;
+      amount1: bigint;
+      recipient?: string;
+    }>
+  ): Promise<void> {
+    log.methodEntry(this.logger, 'addEventsFromUserData', {
+      positionId,
+      eventCount: events.length,
+    });
+
+    try {
+      // 1. Fetch position and pool metadata
+      const positionData = await this.fetchPositionData(positionId);
+      const { chainId, nftId, poolId } = positionData;
+
+      this.logger.debug(
+        { positionId, poolId, chainId, nftId },
+        'Position data fetched'
+      );
+
+      const poolMetadata = await this.fetchPoolMetadata(poolId);
+
+      this.logger.debug(
+        {
+          positionId,
+          poolId,
+          token0: poolMetadata.token0.symbol,
+          token1: poolMetadata.token1.symbol,
+          token0IsQuote: poolMetadata.token0IsQuote,
+        },
+        'Pool metadata fetched'
+      );
+
+      // 2. Get existing events and extract latest state
+      const existingEvents = await this.findAllItems(positionId);
+
+      this.logger.debug(
+        { positionId, existingEventCount: existingEvents.length },
+        'Existing events fetched'
+      );
+
+      // Sort existing events by blockchain order (ascending) for state calculation
+      const sortedExisting = [...existingEvents].sort((a, b) => {
+        const aBlock = a.config.blockNumber;
+        const bBlock = b.config.blockNumber;
+        if (aBlock !== bBlock) return Number(aBlock - bBlock);
+
+        const aTx = a.config.txIndex;
+        const bTx = b.config.txIndex;
+        if (aTx !== bTx) return aTx - bTx;
+
+        return a.config.logIndex - b.config.logIndex;
+      });
+
+      // Extract previous state from last event (or defaults if no events)
+      let previousEventId: string | null = null;
+      let lastBlockNumber = 0n;
+      let lastTxIndex = 0;
+      let lastLogIndex = 0;
+      let liquidity = 0n;
+      let costBasis = 0n;
+      let pnl = 0n;
+      let uncollectedPrincipal0 = 0n;
+      let uncollectedPrincipal1 = 0n;
+
+      if (sortedExisting.length > 0) {
+        const lastEvent = sortedExisting[sortedExisting.length - 1];
+        if (!lastEvent) {
+          throw new Error('Expected last event but got undefined');
+        }
+        previousEventId = lastEvent.id;
+        lastBlockNumber = lastEvent.config.blockNumber;
+        lastTxIndex = lastEvent.config.txIndex;
+        lastLogIndex = lastEvent.config.logIndex;
+        liquidity = lastEvent.config.liquidityAfter;
+        costBasis = lastEvent.costBasisAfter;
+        pnl = lastEvent.pnlAfter;
+        uncollectedPrincipal0 = lastEvent.config.uncollectedPrincipal0After;
+        uncollectedPrincipal1 = lastEvent.config.uncollectedPrincipal1After;
+
+        this.logger.debug(
+          {
+            positionId,
+            lastEventId: previousEventId,
+            lastBlock: lastBlockNumber.toString(),
+            lastTxIndex,
+            lastLogIndex,
+            liquidity: liquidity.toString(),
+            costBasis: costBasis.toString(),
+          },
+          'Latest event state extracted'
+        );
+      } else {
+        this.logger.debug(
+          { positionId },
+          'No existing events, starting fresh'
+        );
+      }
+
+      // 3. Sort new events by blockchain order
+      const sortedEvents = [...events].sort((a, b) => {
+        if (a.blockNumber !== b.blockNumber) return Number(a.blockNumber - b.blockNumber);
+        if (a.transactionIndex !== b.transactionIndex) return a.transactionIndex - b.transactionIndex;
+        return a.logIndex - b.logIndex;
+      });
+
+      if (sortedEvents.length === 0) {
+        this.logger.debug({ positionId }, 'No events to add');
+        return;
+      }
+
+      const firstEvent = sortedEvents[0];
+      const lastNewEvent = sortedEvents[sortedEvents.length - 1];
+      if (!firstEvent || !lastNewEvent) {
+        throw new Error('Expected events but got undefined');
+      }
+
+      this.logger.debug(
+        {
+          positionId,
+          newEventCount: sortedEvents.length,
+          firstBlock: firstEvent.blockNumber.toString(),
+          lastBlock: lastNewEvent.blockNumber.toString(),
+        },
+        'New events sorted by blockchain order'
+      );
+
+      // 4. Validate event ordering - all new events must come AFTER existing events
+      for (const event of sortedEvents) {
+        // Check if event comes after last existing event
+        if (event.blockNumber < lastBlockNumber) {
+          const error = new Error(
+            `Event at block ${event.blockNumber} comes before last existing event at block ${lastBlockNumber}`
+          );
+          log.methodError(this.logger, 'addEventsFromUserData', error, {
+            positionId,
+            eventBlock: event.blockNumber.toString(),
+            lastBlock: lastBlockNumber.toString(),
+          });
+          throw error;
+        }
+
+        if (event.blockNumber === lastBlockNumber) {
+          if (event.transactionIndex < lastTxIndex) {
+            const error = new Error(
+              `Event at tx index ${event.transactionIndex} comes before last existing event at tx index ${lastTxIndex} (same block ${lastBlockNumber})`
+            );
+            log.methodError(this.logger, 'addEventsFromUserData', error, {
+              positionId,
+              eventTxIndex: event.transactionIndex,
+              lastTxIndex,
+            });
+            throw error;
+          }
+
+          if (event.transactionIndex === lastTxIndex) {
+            if (event.logIndex <= lastLogIndex) {
+              const error = new Error(
+                `Event at log index ${event.logIndex} comes before or equals last existing event at log index ${lastLogIndex} (same block ${lastBlockNumber}, same tx ${lastTxIndex})`
+              );
+              log.methodError(this.logger, 'addEventsFromUserData', error, {
+                positionId,
+                eventLogIndex: event.logIndex,
+                lastLogIndex,
+              });
+              throw error;
+            }
+          }
+        }
+      }
+
+      this.logger.info(
+        { positionId, eventCount: sortedEvents.length },
+        'Event ordering validated - all events come after existing events'
+      );
+
+      // 5. Process events sequentially
+      for (let i = 0; i < sortedEvents.length; i++) {
+        const event = sortedEvents[i];
+        if (!event) {
+          throw new Error(`Expected event at index ${i} but got undefined`);
+        }
+
+        this.logger.debug(
+          {
+            positionId,
+            eventIndex: i + 1,
+            totalEvents: sortedEvents.length,
+            eventType: event.eventType,
+            blockNumber: event.blockNumber.toString(),
+          },
+          'Processing event'
+        );
+
+        // Fetch historic pool price at event blockNumber
+        const historicPrice = await this.getHistoricPoolPrice(
+          poolId,
+          event.blockNumber
+        );
+
+        // Convert user event to RawPositionEvent format
+        const rawEvent: RawPositionEvent = {
+          eventType: event.eventType,
+          tokenId: event.tokenId.toString(),
+          transactionHash: event.transactionHash,
+          blockNumber: event.blockNumber,
+          transactionIndex: event.transactionIndex,
+          logIndex: event.logIndex,
+          blockTimestamp: event.timestamp,
+          chainId,
+          liquidity: event.liquidity?.toString(),
+          amount0: event.amount0.toString(),
+          amount1: event.amount1.toString(),
+          recipient: event.recipient,
+        };
+
+        // Build event input with financial calculations
+        const eventInput = await this.buildEventFromRawData({
+          rawEvent,
+          previousState: {
+            uncollectedPrincipal0,
+            uncollectedPrincipal1,
+            liquidity,
+            costBasis,
+            pnl,
+          },
+          poolMetadata,
+          sqrtPriceX96: historicPrice.sqrtPriceX96,
+          previousEventId,
+          positionId,
+        });
+
+        this.logger.debug(
+          {
+            positionId,
+            eventIndex: i + 1,
+            eventType: eventInput.eventType,
+            deltaCostBasis: eventInput.deltaCostBasis.toString(),
+            deltaPnl: eventInput.deltaPnl.toString(),
+          },
+          'Event built with financial calculations'
+        );
+
+        // Add event to database
+        await this.addItem(positionId, eventInput);
+
+        // Update state for next iteration
+        // Note: We get the actual event ID from the returned events
+        const allEvents = await this.findAllItems(positionId);
+        const justAdded = allEvents[0]; // Most recent (findAllItems returns descending)
+        if (!justAdded) {
+          throw new Error('Expected to find just-added event but got undefined');
+        }
+        previousEventId = justAdded.id;
+
+        liquidity = eventInput.config.liquidityAfter;
+        costBasis = eventInput.costBasisAfter;
+        pnl = eventInput.pnlAfter;
+        uncollectedPrincipal0 = eventInput.config.uncollectedPrincipal0After;
+        uncollectedPrincipal1 = eventInput.config.uncollectedPrincipal1After;
+        lastBlockNumber = event.blockNumber;
+        lastTxIndex = event.transactionIndex;
+        lastLogIndex = event.logIndex;
+
+        this.logger.info(
+          {
+            positionId,
+            eventIndex: i + 1,
+            totalEvents: sortedEvents.length,
+            liquidityAfter: liquidity.toString(),
+            costBasisAfter: costBasis.toString(),
+            pnlAfter: pnl.toString(),
+          },
+          'Event added successfully'
+        );
+      }
+
+      log.methodExit(this.logger, 'addEventsFromUserData', {
+        positionId,
+        eventsAdded: sortedEvents.length,
+      });
+    } catch (error) {
+      log.methodError(this.logger, 'addEventsFromUserData', error as Error, {
+        positionId,
+        eventCount: events.length,
+      });
+      throw error;
+    }
+  }
+
+  // ============================================================================
+  // PRIVATE HELPER METHODS
+  // ============================================================================
+
   /**
    * Get historic pool price at specific block
    *

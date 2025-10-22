@@ -1787,6 +1787,167 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     }
   }
 
+  /**
+   * Update an existing position by adding new events from user-provided data
+   *
+   * This method:
+   * 1. Validates ownership (returns null if position doesn't exist or not owned by user)
+   * 2. Adds events to the position ledger (events must come AFTER existing events)
+   * 3. Refreshes position state with new financial calculations
+   * 4. Returns fully populated position with updated PnL, fees, etc.
+   *
+   * Security: Returns null for both "not found" and "not owned" cases to prevent
+   * information leakage about other users' positions.
+   *
+   * @param userId - ID of the user who owns the position
+   * @param chainId - Chain ID where the position exists
+   * @param nftId - NFT token ID of the position
+   * @param events - Array of events to add (INCREASE_LIQUIDITY, DECREASE_LIQUIDITY, COLLECT)
+   * @returns The updated position, or null if position not found or not owned by user
+   *
+   * @throws Error if events are invalid (ordering, validation, etc.)
+   *
+   * @example
+   * ```typescript
+   * const position = await service.updatePositionWithEvents(
+   *   'user-123',
+   *   1,
+   *   42,
+   *   [{
+   *     eventType: 'COLLECT',
+   *     timestamp: new Date('2025-01-15T10:30:00Z'),
+   *     blockNumber: 12345678n,
+   *     transactionIndex: 5,
+   *     logIndex: 2,
+   *     transactionHash: '0x...',
+   *     tokenId: 42n,
+   *     amount0: 1000000n,
+   *     amount1: 500000000000000000n,
+   *     recipient: '0x...',
+   *   }]
+   * );
+   *
+   * if (!position) {
+   *   // Position not found or not owned by user
+   *   return res.status(404).json({ error: 'Position not found' });
+   * }
+   * ```
+   */
+  async updatePositionWithEvents(
+    userId: string,
+    chainId: number,
+    nftId: number,
+    events: Array<{
+      eventType: 'INCREASE_LIQUIDITY' | 'DECREASE_LIQUIDITY' | 'COLLECT';
+      timestamp: Date;
+      blockNumber: bigint;
+      transactionIndex: number;
+      logIndex: number;
+      transactionHash: string;
+      tokenId: bigint;
+      liquidity?: bigint;
+      amount0: bigint;
+      amount1: bigint;
+      recipient?: string;
+    }>
+  ): Promise<UniswapV3Position | null> {
+    log.methodEntry(this.logger, 'updatePositionWithEvents', {
+      userId,
+      chainId,
+      nftId,
+      eventCount: events.length,
+    });
+
+    try {
+      // 1. Find position by chainId and nftId
+      const positionHash = this.createPositionHash({
+        chainId,
+        nftId,
+        poolAddress: '0x0000000000000000000000000000000000000000', // Not used in hash
+        tickLower: 0, // Not used in hash
+        tickUpper: 0, // Not used in hash
+      });
+
+      log.dbOperation(this.logger, 'findUnique', 'Position', {
+        userId,
+        chainId,
+        nftId,
+        positionHash,
+      });
+
+      const existingPosition = await this.prisma.position.findUnique({
+        where: { positionHash },
+        include: { pool: true },
+      });
+
+      // Return null for both "not found" and "not owned" (security)
+      if (!existingPosition || existingPosition.userId !== userId) {
+        this.logger.info(
+          { userId, chainId, nftId, exists: !!existingPosition },
+          'Position not found or not owned by user'
+        );
+        log.methodExit(this.logger, 'updatePositionWithEvents', {
+          result: 'not_found_or_not_owned',
+        });
+        return null;
+      }
+
+      this.logger.debug(
+        { positionId: existingPosition.id, userId, chainId, nftId },
+        'Position found and ownership verified'
+      );
+
+      // 2. Add events to ledger
+      this.logger.info(
+        { positionId: existingPosition.id, eventCount: events.length },
+        'Adding events to position ledger'
+      );
+
+      await this.ledgerService.addEventsFromUserData(
+        existingPosition.id,
+        events
+      );
+
+      this.logger.info(
+        { positionId: existingPosition.id, eventCount: events.length },
+        'Events added successfully'
+      );
+
+      // 3. Refresh position state
+      this.logger.info(
+        { positionId: existingPosition.id },
+        'Refreshing position state'
+      );
+
+      const updatedPosition = await this.refresh(existingPosition.id);
+
+      this.logger.info(
+        {
+          positionId: existingPosition.id,
+          liquidity: updatedPosition.state.liquidity.toString(),
+          realizedPnl: updatedPosition.realizedPnl.toString(),
+          unrealizedPnl: updatedPosition.unrealizedPnl.toString(),
+        },
+        'Position refreshed with new state'
+      );
+
+      log.methodExit(this.logger, 'updatePositionWithEvents', {
+        positionId: existingPosition.id,
+        eventsAdded: events.length,
+      });
+
+      return updatedPosition;
+    } catch (error) {
+      log.methodError(this.logger, 'updatePositionWithEvents', error as Error, {
+        userId,
+        chainId,
+        nftId,
+        eventCount: events.length,
+      });
+      throw error;
+    }
+  }
+
   // ============================================================================
   // CRUD OPERATIONS OVERRIDES
   // ============================================================================
