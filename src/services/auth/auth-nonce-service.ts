@@ -10,7 +10,6 @@
  * - Prevents replay attacks
  */
 
-import { nanoid } from 'nanoid';
 import { CacheService } from '../cache/cache-service.js';
 
 export interface AuthNonceServiceDependencies {
@@ -29,16 +28,20 @@ export class AuthNonceService {
   /**
    * Generate new nonce for SIWE authentication
    *
-   * @returns Nonce string (siwe_{32_random_chars})
+   * @returns Nonce string (alphanumeric only, min 8 chars)
    *
    * @example
    * ```typescript
    * const nonce = await service.generateNonce();
-   * // Returns: "siwe_a1b2c3d4e5f6..."
+   * // Returns: "a1b2c3d4e5f6..."
    * ```
    */
   async generateNonce(): Promise<string> {
-    const nonce = `siwe_${nanoid(32)}`;
+    // SIWE requires alphanumeric-only nonces (no special characters)
+    // Use customAlphabet to generate only alphanumeric characters
+    const { customAlphabet } = await import('nanoid');
+    const generateAlphanumeric = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 32);
+    const nonce = generateAlphanumeric();
     const key = `${this.NONCE_PREFIX}${nonce}`;
 
     await this.cacheService.set(key, { createdAt: new Date().toISOString() }, this.NONCE_TTL);
