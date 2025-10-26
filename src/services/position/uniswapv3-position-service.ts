@@ -2339,38 +2339,16 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
     }
 
     // Determine token roles
-    const baseToken = position.isToken0Quote ? pool.token1 : pool.token0;
-    const quoteToken = position.isToken0Quote ? pool.token0 : pool.token1;
     const baseIsToken0 = !position.isToken0Quote;
 
-    // Calculate current pool price (quote per base)
-    let currentPrice: bigint;
-    const quoteDecimals = BigInt(quoteToken.decimals);
-    const baseDecimals = BigInt(baseToken.decimals);
-
-    if (position.isToken0Quote) {
-      // token0 = quote, token1 = base
-      // price = token0 per token1 = Q192 / (sqrtPriceX96^2)
-      currentPrice = (2n ** 192n) / (sqrtPriceX96 * sqrtPriceX96);
-      // Scale to quote decimals
-      currentPrice = (currentPrice * (10n ** quoteDecimals)) / (10n ** baseDecimals);
-    } else {
-      // token0 = base, token1 = quote
-      // price = token1 per token0 = (sqrtPriceX96^2) / Q192
-      currentPrice = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
-      // Scale to quote decimals
-      currentPrice = (currentPrice * (10n ** quoteDecimals)) / (10n ** baseDecimals);
-    }
-
     // Calculate position value using utility function
+    // Converts all token amounts to quote token value using sqrtPriceX96
     const positionValue = calculatePositionValue(
       liquidity,
       sqrtPriceX96,
       tickLower,
       tickUpper,
-      currentPrice,
-      baseIsToken0,
-      baseToken.decimals
+      baseIsToken0
     );
 
     return positionValue;
