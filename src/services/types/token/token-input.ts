@@ -104,6 +104,10 @@ export interface Erc20TokenSearchCandidate {
     address: string;
     /** EVM chain ID where this token exists */
     chainId: number;
+    /** Token logo URL from CoinGecko (if available) */
+    logoUrl?: string;
+    /** Market cap in USD (used for sorting results by popularity) */
+    marketCap?: number;
 }
 
 /**

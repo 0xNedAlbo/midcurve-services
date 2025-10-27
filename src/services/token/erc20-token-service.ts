@@ -988,6 +988,8 @@ export class Erc20TokenService extends TokenService<"erc20"> {
                     name: token.name,
                     address: config.address,
                     chainId: config.chainId,
+                    logoUrl: token.logoUrl || undefined,
+                    marketCap: token.marketCap || undefined,
                 };
             });
 
