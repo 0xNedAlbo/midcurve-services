@@ -39,7 +39,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "dotenv -e .env -- tsx prisma/seed.ts",
     "backfill:position-hash": "dotenv -e .env -- tsx scripts/backfill-position-hash.ts",
-    "yalc:link": "yalc add @midcurve/shared && npm install",
+    "yalc:link": "yalc link @midcurve/shared && npm install",
     "yalc:update": "yalc update @midcurve/shared",
     "yalc:unlink": "yalc remove @midcurve/shared && npm install",
     "yalc:clean": "rimraf .yalc yalc.lock",
