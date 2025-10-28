@@ -935,16 +935,31 @@ export class Erc20TokenService extends TokenService<"erc20"> {
                 },
             };
 
-            // Add symbol filter if provided
-            if (symbol) {
+            // Add symbol/name filter with OR logic (if both provided, match either)
+            if (symbol && name) {
+                // Both symbol and name provided - match EITHER (OR logic)
+                where.OR = [
+                    {
+                        symbol: {
+                            contains: symbol,
+                            mode: "insensitive",
+                        },
+                    },
+                    {
+                        name: {
+                            contains: name,
+                            mode: "insensitive",
+                        },
+                    },
+                ];
+            } else if (symbol) {
+                // Only symbol provided
                 where.symbol = {
                     contains: symbol,
                     mode: "insensitive",
                 };
-            }
-
-            // Add name filter if provided
-            if (name) {
+            } else if (name) {
+                // Only name provided
                 where.name = {
                     contains: name,
                     mode: "insensitive",
