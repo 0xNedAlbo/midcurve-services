@@ -102,6 +102,24 @@ export interface PoolFeeData {
   sqrtPriceX96: string;
 
   /**
+   * Total Value Locked in USD (from poolDayData)
+   * Example: "234567890.75"
+   */
+  tvlUSD: string;
+
+  /**
+   * 24-hour trading volume in USD (from poolDayData)
+   * Example: "23456789.12"
+   */
+  volumeUSD: string;
+
+  /**
+   * 24-hour fees collected in USD (from poolDayData)
+   * Example: "2345.67"
+   */
+  feesUSD: string;
+
+  /**
    * Token0 data (lower address in pool pair)
    */
   token0: {

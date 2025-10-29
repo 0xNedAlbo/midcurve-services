@@ -392,6 +392,9 @@ export class UniswapV3SubgraphClient {
         feeTier: pool.feeTier,
         poolLiquidity: pool.liquidity,
         sqrtPriceX96: pool.sqrtPrice,
+        tvlUSD: dayData.tvlUSD || '0',
+        volumeUSD: dayData.volumeUSD || '0',
+        feesUSD: dayData.feesUSD || '0',
         token0: {
           address: normalizeAddress(pool.token0.id),
           symbol: pool.token0.symbol,

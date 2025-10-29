@@ -370,19 +370,31 @@ export class UniswapV3PoolDiscoveryService extends PoolDiscoveryService<'uniswap
         const poolAddress = result.pool.config.address;
 
         try {
-          const metrics = await this.subgraphClient.getPoolMetrics(
+          // Use getPoolFeeData() instead of getPoolMetrics() to get token-specific volumes
+          const feeData = await this.subgraphClient.getPoolFeeData(
             chainId,
             poolAddress
           );
 
-          // Update result with metrics
-          result.tvlUSD = metrics.tvlUSD;
-          result.volumeUSD = metrics.volumeUSD;
-          result.feesUSD = metrics.feesUSD;
+          // Update result with aggregate metrics
+          result.tvlUSD = feeData.tvlUSD;
+          result.volumeUSD = feeData.volumeUSD;
+          result.feesUSD = feeData.feesUSD;
+
+          // Update result with token-specific metrics (for accurate APR calculations)
+          result.volumeToken0 = feeData.token0.dailyVolume;
+          result.volumeToken1 = feeData.token1.dailyVolume;
+          result.token0Price = feeData.token0.price;
+          result.token1Price = feeData.token1.price;
 
           this.logger.debug(
-            { poolAddress, tvlUSD: metrics.tvlUSD },
-            'Pool enriched with subgraph metrics'
+            {
+              poolAddress,
+              tvlUSD: feeData.tvlUSD,
+              volumeToken0: feeData.token0.dailyVolume,
+              volumeToken1: feeData.token1.dailyVolume,
+            },
+            'Pool enriched with subgraph metrics and token-specific data'
           );
         } catch (error) {
           // Check error type to determine if we should fail or use defaults
