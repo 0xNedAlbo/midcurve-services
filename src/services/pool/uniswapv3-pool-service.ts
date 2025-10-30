@@ -30,6 +30,7 @@ import {
   readPoolConfig,
   readPoolState,
   PoolConfigError,
+  uniswapV3PoolAbi,
 } from '../../utils/uniswapv3/index.js';
 import { EvmConfig } from '../../config/evm.js';
 import { Erc20TokenService } from '../token/erc20-token-service.js';
@@ -848,6 +849,102 @@ export class UniswapV3PoolService extends PoolService<'uniswapv3'> {
         chainId: (dbToken.config as { chainId: number }).chainId,
       },
     };
+  }
+
+  /**
+   * Get current pool price from on-chain data
+   *
+   * Fetches only sqrtPriceX96 and currentTick from the pool contract.
+   * This is a lightweight operation optimized for frequent price checks
+   * without updating the database.
+   *
+   * @param chainId - Chain ID where the pool is deployed
+   * @param poolAddress - Pool contract address
+   * @returns Current price data { sqrtPriceX96, currentTick }
+   * @throws Error if chain is not supported
+   * @throws Error if pool address is invalid
+   * @throws Error if on-chain read fails
+   */
+  async getPoolPrice(
+    chainId: number,
+    poolAddress: string
+  ): Promise<{ sqrtPriceX96: string; currentTick: number }> {
+    log.methodEntry(this.logger, 'getPoolPrice', { chainId, poolAddress });
+
+    try {
+      // 1. Validate pool address format
+      if (!isValidAddress(poolAddress)) {
+        const error = new Error(
+          `Invalid pool address format: ${poolAddress}`
+        );
+        log.methodError(this.logger, 'getPoolPrice', error, {
+          poolAddress,
+          chainId,
+        });
+        throw error;
+      }
+
+      // 2. Normalize to EIP-55
+      const normalizedAddress = normalizeAddress(poolAddress);
+
+      // 3. Verify chain is supported
+      if (!this.evmConfig.isChainSupported(chainId)) {
+        const error = new Error(
+          `Chain ${chainId} is not configured. Supported chains: ${this.evmConfig
+            .getSupportedChainIds()
+            .join(', ')}`
+        );
+        log.methodError(this.logger, 'getPoolPrice', error, { chainId });
+        throw error;
+      }
+
+      // 4. Get public client for the chain
+      const client = this.evmConfig.getPublicClient(chainId);
+
+      // 5. Read slot0 to get current price and tick
+      this.logger.debug(
+        { poolAddress: normalizedAddress, chainId },
+        'Reading slot0 from pool contract'
+      );
+
+      const slot0Data = (await client.readContract({
+        address: normalizedAddress as `0x${string}`,
+        abi: uniswapV3PoolAbi,
+        functionName: 'slot0',
+      })) as readonly [bigint, number, number, number, number, number, boolean];
+
+      const sqrtPriceX96 = slot0Data[0];
+      const currentTick = slot0Data[1];
+
+      this.logger.info(
+        {
+          poolAddress: normalizedAddress,
+          chainId,
+          sqrtPriceX96: sqrtPriceX96.toString(),
+          currentTick,
+        },
+        'Pool price fetched successfully'
+      );
+
+      log.methodExit(this.logger, 'getPoolPrice', {
+        sqrtPriceX96: sqrtPriceX96.toString(),
+        currentTick,
+      });
+
+      return {
+        sqrtPriceX96: sqrtPriceX96.toString(),
+        currentTick,
+      };
+    } catch (error) {
+      // Only log if not already logged
+      if (!(error instanceof Error && error.message.includes('Invalid'))) {
+        log.methodError(this.logger, 'getPoolPrice', error as Error, {
+          poolAddress,
+          chainId,
+        });
+      }
+      throw error;
+    }
   }
 
   /**
