@@ -15,6 +15,7 @@ import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
 import { CacheService } from '../../services/cache/index.js';
 import { RequestScheduler } from '../../utils/request-scheduler/index.js';
+import { getAddress, isAddress } from 'viem';
 
 /**
  * CoinGecko token representation from the coins list API
@@ -851,12 +852,31 @@ export class CoinGeckoClient {
         })
         .slice(0, 10) // Limit to 10 results
         .sort((a, b) => a.symbol.localeCompare(b.symbol)) // Sort alphabetically by symbol
-        .map((token) => ({
-          coingeckoId: token.id,
-          symbol: token.symbol.toUpperCase(),
-          name: token.name,
-          address: token.platforms[platform]!, // Safe to assert non-null due to filter above
-        }));
+        .map((token) => {
+          const rawAddress = token.platforms[platform]!; // Safe to assert non-null due to filter above
+
+          // Ensure address is properly checksummed (EIP-55)
+          // CoinGecko may return addresses without proper checksumming
+          let checksummedAddress = rawAddress;
+          if (isAddress(rawAddress)) {
+            try {
+              checksummedAddress = getAddress(rawAddress);
+            } catch (error) {
+              // If checksumming fails, log warning and use raw address
+              this.logger.warn(
+                { address: rawAddress, error },
+                'Failed to checksum address from CoinGecko'
+              );
+            }
+          }
+
+          return {
+            coingeckoId: token.id,
+            symbol: token.symbol.toUpperCase(),
+            name: token.name,
+            address: checksummedAddress,
+          };
+        });
 
       this.logger.info(
         { platform, symbol, name, address, count: matchingTokens.length },
