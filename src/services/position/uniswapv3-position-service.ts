@@ -44,6 +44,10 @@ import {
 import { calculatePositionValue } from '@midcurve/shared';
 import { tickToPrice } from '@midcurve/shared';
 import { uniswapV3PoolAbi } from '../../utils/uniswapv3/pool-abi.js';
+import {
+  calculatePoolPriceInQuoteToken,
+  calculateTokenValueInQuote,
+} from '../../utils/uniswapv3/ledger-calculations.js';
 
 /**
  * Dependencies for UniswapV3PositionService
@@ -1592,24 +1596,15 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       );
 
       // 10. Calculate pool price (quote per base) from historic sqrtPriceX96
-      const quoteDecimals = BigInt(quoteToken.decimals);
-      const baseDecimals = BigInt(baseToken.decimals);
       const sqrtPriceX96 = poolPrice.state.sqrtPriceX96;
-
-      let poolPriceValue: bigint;
-      if (isToken0Quote) {
-        // token0 = quote, token1 = base
-        // price = token0 per token1 = Q192 / (sqrtPriceX96^2)
-        poolPriceValue = (2n ** 192n) / (sqrtPriceX96 * sqrtPriceX96);
-        // Scale to quote decimals
-        poolPriceValue = (poolPriceValue * (10n ** quoteDecimals)) / (10n ** baseDecimals);
-      } else {
-        // token0 = base, token1 = quote
-        // price = token1 per token0 = (sqrtPriceX96^2) / Q192
-        poolPriceValue = (sqrtPriceX96 * sqrtPriceX96) / (2n ** 192n);
-        // Scale to quote decimals
-        poolPriceValue = (poolPriceValue * (10n ** quoteDecimals)) / (10n ** baseDecimals);
-      }
+      
+      // Use the correct utility function that handles precision properly
+      const poolPriceValue = calculatePoolPriceInQuoteToken(
+        sqrtPriceX96,
+        isToken0Quote,
+        pool.token0.decimals,
+        pool.token1.decimals
+      );
 
       this.logger.debug(
         {
@@ -1625,18 +1620,15 @@ export class UniswapV3PositionService extends PositionService<'uniswapv3'> {
       const token0Amount = input.increaseEvent.amount0;
       const token1Amount = input.increaseEvent.amount1;
 
-      let tokenValue: bigint;
-      if (isToken0Quote) {
-        // token0 = quote, token1 = base
-        // Value = amount0 + (amount1 * poolPrice)
-        const token1InQuote = (token1Amount * poolPriceValue) / (10n ** baseDecimals);
-        tokenValue = token0Amount + token1InQuote;
-      } else {
-        // token0 = base, token1 = quote
-        // Value = (amount0 * poolPrice) + amount1
-        const token0InQuote = (token0Amount * poolPriceValue) / (10n ** baseDecimals);
-        tokenValue = token0InQuote + token1Amount;
-      }
+      // Use the utility function that correctly handles the conversion
+      const tokenValue = calculateTokenValueInQuote(
+        token0Amount,
+        token1Amount,
+        sqrtPriceX96,
+        isToken0Quote,
+        pool.token0.decimals,
+        pool.token1.decimals
+      );
 
       this.logger.debug(
         {
