@@ -1692,7 +1692,15 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     functionName: "slot0",
                     blockNumber,
                 }) as Promise<
-                    readonly [bigint, number, number, number, number, number, boolean]
+                    readonly [
+                        bigint,
+                        number,
+                        number,
+                        number,
+                        number,
+                        number,
+                        boolean
+                    ]
                 >,
             ]);
 
@@ -1738,8 +1746,10 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 {
                     ownerAddress: state.ownerAddress,
                     liquidity: state.liquidity.toString(),
-                    feeGrowthInside0LastX128: state.feeGrowthInside0LastX128.toString(),
-                    feeGrowthInside1LastX128: state.feeGrowthInside1LastX128.toString(),
+                    feeGrowthInside0LastX128:
+                        state.feeGrowthInside0LastX128.toString(),
+                    feeGrowthInside1LastX128:
+                        state.feeGrowthInside1LastX128.toString(),
                 },
                 "Position state initialized with fee growth checkpoints"
             );
