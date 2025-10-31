@@ -225,15 +225,52 @@ export class UniswapV3PoolPriceService extends PoolPriceService<'uniswapv3'> {
         'Reading pool slot0 at block'
       );
 
-      const slot0Data = (await client.readContract({
-        address: poolAddress as `0x${string}`,
-        abi: uniswapV3PoolAbi,
-        functionName: 'slot0',
-        blockNumber: BigInt(params.blockNumber),
-      })) as readonly [bigint, number, number, number, number, number, boolean];
+      let slot0Data: readonly [bigint, number, number, number, number, number, boolean];
+      let usedCurrentBlock = false;
+
+      try {
+        // Try to read at the specified historical block
+        slot0Data = (await client.readContract({
+          address: poolAddress as `0x${string}`,
+          abi: uniswapV3PoolAbi,
+          functionName: 'slot0',
+          blockNumber: BigInt(params.blockNumber),
+        })) as readonly [bigint, number, number, number, number, number, boolean];
+      } catch (historicalError) {
+        // If historical block query fails (block too recent or not indexed yet),
+        // fall back to current block as approximation
+        this.logger.warn(
+          {
+            poolAddress,
+            blockNumber: params.blockNumber,
+            error: (historicalError as Error).message,
+          },
+          'Failed to read pool state at historical block, falling back to current block'
+        );
+
+        slot0Data = (await client.readContract({
+          address: poolAddress as `0x${string}`,
+          abi: uniswapV3PoolAbi,
+          functionName: 'slot0',
+          // No blockNumber = current block
+        })) as readonly [bigint, number, number, number, number, number, boolean];
+
+        usedCurrentBlock = true;
+      }
 
       const sqrtPriceX96 = slot0Data[0];
       const tick = slot0Data[1];
+
+      if (usedCurrentBlock) {
+        this.logger.info(
+          {
+            poolAddress,
+            requestedBlock: params.blockNumber,
+            sqrtPriceX96: sqrtPriceX96.toString(),
+          },
+          'Used current block price as fallback for recent transaction'
+        );
+      }
 
       // 9. Calculate prices using utility functions
       const token1PricePerToken0 = pricePerToken0InToken1(
