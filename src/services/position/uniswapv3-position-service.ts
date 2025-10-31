@@ -1616,12 +1616,120 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 tickLower: input.tickLower,
             };
 
-            // 7. Create position state from user input + defaults
+            // 7. Fetch fee growth inside at position creation block
+            // This establishes the checkpoint - user only earns fees AFTER opening position
+            this.logger.debug(
+                {
+                    poolAddress,
+                    blockNumber: input.increaseEvent.blockNumber.toString(),
+                    tickLower: input.tickLower,
+                    tickUpper: input.tickUpper,
+                },
+                "Fetching fee growth inside at position creation block"
+            );
+
+            const client = this.evmConfig.getPublicClient(chainId);
+            const blockNumber = input.increaseEvent.blockNumber;
+
+            const [
+                feeGrowthGlobal0X128,
+                feeGrowthGlobal1X128,
+                tickDataLower,
+                tickDataUpper,
+                poolSlot0,
+            ] = await Promise.all([
+                client.readContract({
+                    address: poolAddress as Address,
+                    abi: uniswapV3PoolAbi,
+                    functionName: "feeGrowthGlobal0X128",
+                    blockNumber,
+                }) as Promise<bigint>,
+                client.readContract({
+                    address: poolAddress as Address,
+                    abi: uniswapV3PoolAbi,
+                    functionName: "feeGrowthGlobal1X128",
+                    blockNumber,
+                }) as Promise<bigint>,
+                client.readContract({
+                    address: poolAddress as Address,
+                    abi: uniswapV3PoolAbi,
+                    functionName: "ticks",
+                    args: [input.tickLower],
+                    blockNumber,
+                }) as Promise<
+                    readonly [
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        number,
+                        boolean
+                    ]
+                >,
+                client.readContract({
+                    address: poolAddress as Address,
+                    abi: uniswapV3PoolAbi,
+                    functionName: "ticks",
+                    args: [input.tickUpper],
+                    blockNumber,
+                }) as Promise<
+                    readonly [
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        bigint,
+                        number,
+                        boolean
+                    ]
+                >,
+                client.readContract({
+                    address: poolAddress as Address,
+                    abi: uniswapV3PoolAbi,
+                    functionName: "slot0",
+                    blockNumber,
+                }) as Promise<
+                    readonly [bigint, number, number, number, number, number, boolean]
+                >,
+            ]);
+
+            const currentTick = poolSlot0[1];
+            const feeGrowthOutsideLower0X128 = tickDataLower[2];
+            const feeGrowthOutsideLower1X128 = tickDataLower[3];
+            const feeGrowthOutsideUpper0X128 = tickDataUpper[2];
+            const feeGrowthOutsideUpper1X128 = tickDataUpper[3];
+
+            // Calculate fee growth inside at position creation
+            const feeGrowthInside = computeFeeGrowthInside(
+                currentTick,
+                input.tickLower,
+                input.tickUpper,
+                feeGrowthGlobal0X128,
+                feeGrowthGlobal1X128,
+                feeGrowthOutsideLower0X128,
+                feeGrowthOutsideLower1X128,
+                feeGrowthOutsideUpper0X128,
+                feeGrowthOutsideUpper1X128
+            );
+
+            this.logger.debug(
+                {
+                    feeGrowthInside0: feeGrowthInside.inside0.toString(),
+                    feeGrowthInside1: feeGrowthInside.inside1.toString(),
+                    currentTick,
+                },
+                "Fee growth inside calculated at position creation block"
+            );
+
+            // 8. Create position state from user input with correct fee checkpoints
             const state: UniswapV3PositionState = {
                 ownerAddress,
                 liquidity: input.increaseEvent.liquidity,
-                feeGrowthInside0LastX128: 0n, // New position
-                feeGrowthInside1LastX128: 0n, // New position
+                feeGrowthInside0LastX128: feeGrowthInside.inside0, // Checkpoint at creation
+                feeGrowthInside1LastX128: feeGrowthInside.inside1, // Checkpoint at creation
                 tokensOwed0: 0n, // New position
                 tokensOwed1: 0n, // New position
             };
@@ -1630,11 +1738,13 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 {
                     ownerAddress: state.ownerAddress,
                     liquidity: state.liquidity.toString(),
+                    feeGrowthInside0LastX128: state.feeGrowthInside0LastX128.toString(),
+                    feeGrowthInside1LastX128: state.feeGrowthInside1LastX128.toString(),
                 },
-                "Position state initialized from user input"
+                "Position state initialized with fee growth checkpoints"
             );
 
-            // 8. Create position via create() method
+            // 9. Create position via create() method
             const createdPosition = await this.create({
                 protocol: "uniswapv3",
                 positionType: "CL_TICKS",
@@ -1658,7 +1768,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Position created in database"
             );
 
-            // 9. Fetch historic pool price at event blockNumber
+            // 10. Fetch historic pool price at event blockNumber
             this.logger.debug(
                 {
                     positionId: createdPosition.id,
@@ -1685,7 +1795,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Historic pool price fetched"
             );
 
-            // 10. Calculate pool price (quote per base) from historic sqrtPriceX96
+            // 11. Calculate pool price (quote per base) from historic sqrtPriceX96
             const sqrtPriceX96 = poolPrice.state.sqrtPriceX96;
 
             // Use the correct utility function that handles precision properly
@@ -1706,7 +1816,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Pool price calculated from historic sqrtPriceX96"
             );
 
-            // 11. Calculate token value in quote units
+            // 12. Calculate token value in quote units
             const token0Amount = input.increaseEvent.amount0;
             const token1Amount = input.increaseEvent.amount1;
 
@@ -1728,7 +1838,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Token value calculated in quote units"
             );
 
-            // 12. Create INCREASE_POSITION ledger event
+            // 13. Create INCREASE_POSITION ledger event
             this.logger.debug(
                 { positionId: createdPosition.id },
                 "Creating INCREASE_POSITION ledger event"
@@ -1788,7 +1898,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Ledger event created"
             );
 
-            // 13. Calculate and update position common fields
+            // 14. Calculate and update position common fields
             this.logger.debug(
                 { positionId: createdPosition.id },
                 "Calculating position common fields"
