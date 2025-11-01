@@ -36,6 +36,8 @@ import { UniswapV3PoolService } from "../pool/uniswapv3-pool-service.js";
 import { EtherscanClient } from "../../clients/etherscan/index.js";
 import { UniswapV3PositionLedgerService } from "../position-ledger/uniswapv3-position-ledger-service.js";
 import { UniswapV3QuoteTokenService } from "../quote-token/uniswapv3-quote-token-service.js";
+import { EvmBlockService } from "../block/evm-block-service.js";
+import { PositionAprService } from "../position-apr/position-apr-service.js";
 import type { Address } from "viem";
 import {
     computeFeeGrowthInside,
@@ -48,6 +50,9 @@ import {
     calculatePoolPriceInQuoteToken,
     calculateTokenValueInQuote,
 } from "../../utils/uniswapv3/ledger-calculations.js";
+// TODO: Use these helpers when refactoring discover() and reset() methods
+// import { refreshAprPeriods } from "./helpers/uniswapv3/apr-periods.js";
+// import { syncLedgerEvents } from "../position-ledger/helpers/uniswapv3/ledger-sync.js";
 
 /**
  * Dependencies for UniswapV3PositionService
@@ -89,6 +94,18 @@ export interface UniswapV3PositionServiceDependencies {
      * If not provided, a new UniswapV3QuoteTokenService instance will be created
      */
     quoteTokenService?: UniswapV3QuoteTokenService;
+
+    /**
+     * EVM block service for finalized block queries
+     * If not provided, a new EvmBlockService instance will be created
+     */
+    evmBlockService?: EvmBlockService;
+
+    /**
+     * Position APR service for APR period calculation
+     * If not provided, a new PositionAprService instance will be created
+     */
+    aprService?: PositionAprService;
 }
 
 /**
@@ -103,6 +120,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
     private readonly _etherscanClient: EtherscanClient;
     private readonly _ledgerService: UniswapV3PositionLedgerService;
     private readonly _quoteTokenService: UniswapV3QuoteTokenService;
+    private readonly _evmBlockService: EvmBlockService;
+    private readonly _aprService: PositionAprService;
 
     /**
      * Creates a new UniswapV3PositionService instance
@@ -132,6 +151,12 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
         this._quoteTokenService =
             dependencies.quoteTokenService ??
             new UniswapV3QuoteTokenService({ prisma: this.prisma });
+        this._evmBlockService =
+            dependencies.evmBlockService ??
+            new EvmBlockService({ evmConfig: this._evmConfig });
+        this._aprService =
+            dependencies.aprService ??
+            new PositionAprService({ prisma: this.prisma });
     }
 
     /**
@@ -167,6 +192,20 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      */
     protected get quoteTokenService(): UniswapV3QuoteTokenService {
         return this._quoteTokenService;
+    }
+
+    /**
+     * Get the EVM block service instance
+     */
+    protected get evmBlockService(): EvmBlockService {
+        return this._evmBlockService;
+    }
+
+    /**
+     * Get the APR service instance
+     */
+    protected get aprService(): PositionAprService {
+        return this._aprService;
     }
 
     // ============================================================================
@@ -934,6 +973,19 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 throw error;
             }
 
+            // 2. Check if recently updated (< 15 seconds ago)
+            const now = new Date();
+            const ageSeconds = (now.getTime() - existingPosition.updatedAt.getTime()) / 1000;
+
+            if (ageSeconds < 15) {
+                this.logger.info(
+                    { id, ageSeconds: ageSeconds.toFixed(2) },
+                    "Position updated recently, returning cached data"
+                );
+                log.methodExit(this.logger, "refresh", { id, cached: true });
+                return existingPosition;
+            }
+
             this.logger.debug(
                 {
                     id,
@@ -970,84 +1022,10 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Reading fresh position state from NonfungiblePositionManager"
             );
 
-            // 3. Get current liquidity from ledger (source of truth)
-            this.logger.debug(
-                { id, chainId, nftId },
-                "Fetching current liquidity from ledger events"
-            );
-
-            const currentLiquidity = await this.getCurrentLiquidityFromLedger(
-                id
-            );
-
-            this.logger.debug(
-                { id, liquidity: currentLiquidity.toString() },
-                "Current liquidity retrieved from ledger"
-            );
-
-            // 4. Determine if on-chain refresh is needed
-            // For closed positions (L=0), skip on-chain call as there are no fees to track
+            // 4. Fetch position state from on-chain
             let updatedState: UniswapV3PositionState;
 
-            if (currentLiquidity === 0n) {
-                this.logger.info(
-                    { id, chainId, nftId },
-                    "Position has zero liquidity, skipping on-chain refresh (no fees to track)"
-                );
-
-                // Use existing state values but with liquidity from ledger
-                updatedState = {
-                    ownerAddress: existingPosition.state.ownerAddress,
-                    liquidity: 0n,
-                    feeGrowthInside0LastX128:
-                        existingPosition.state.feeGrowthInside0LastX128,
-                    feeGrowthInside1LastX128:
-                        existingPosition.state.feeGrowthInside1LastX128,
-                    tokensOwed0: 0n, // No unclaimed fees for L=0 positions
-                    tokensOwed1: 0n, // No unclaimed fees for L=0 positions
-                };
-
-                this.logger.debug(
-                    { id, liquidity: "0" },
-                    "State updated with zero liquidity from ledger, on-chain call skipped"
-                );
-
-                // Check if position should be marked as closed
-                if (existingPosition.isActive) {
-                    const closedAt = await this.getPositionCloseTimestamp(id);
-                    if (closedAt) {
-                        this.logger.info(
-                            { id, chainId, nftId, closedAt },
-                            "Marking position as closed (L=0 with final COLLECT event)"
-                        );
-
-                        await this.prisma.position.update({
-                            where: { id },
-                            data: {
-                                isActive: false,
-                                positionClosedAt: closedAt,
-                            },
-                        });
-
-                        this.logger.info(
-                            { id, closedAt },
-                            "Position marked as closed successfully"
-                        );
-                    } else {
-                        this.logger.debug(
-                            { id },
-                            "Position has L=0 but is not fully closed (awaiting final COLLECT or has uncollected principal)"
-                        );
-                    }
-                }
-            } else {
-                // 5. Position has liquidity - fetch fee data from on-chain
-                this.logger.debug(
-                    { id, liquidity: currentLiquidity.toString() },
-                    "Position has liquidity, reading fee data from NonfungiblePositionManager"
-                );
-
-                const [positionData, ownerAddress] = await Promise.all([
+            const [positionData, ownerAddress] = await Promise.all([
                     client.readContract({
                         address: positionManagerAddress,
                         abi: UNISWAP_V3_POSITION_MANAGER_ABI,
@@ -1080,19 +1058,20 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 this.logger.debug(
                     {
                         id,
+                        liquidity: positionData[7].toString(),
                         feeGrowthInside0LastX128: positionData[8].toString(),
                         feeGrowthInside1LastX128: positionData[9].toString(),
                         tokensOwed0: positionData[10].toString(),
                         tokensOwed1: positionData[11].toString(),
                         owner: ownerAddress,
                     },
-                    "Fee data and owner read from on-chain"
+                    "Position state read from on-chain"
                 );
 
-                // Create updated state: ledger liquidity + on-chain fee data
+                // Create updated state from on-chain data
                 updatedState = {
                     ownerAddress: normalizeAddress(ownerAddress),
-                    liquidity: currentLiquidity, // From ledger, NOT on-chain
+                    liquidity: positionData[7], // From on-chain
                     feeGrowthInside0LastX128: positionData[8],
                     feeGrowthInside1LastX128: positionData[9],
                     tokensOwed0: positionData[10],
@@ -1104,12 +1083,41 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         id,
                         ownerAddress: updatedState.ownerAddress,
                         liquidity: updatedState.liquidity.toString(),
-                        liquiditySource: "ledger",
-                        feesSource: "on-chain",
+                        stateSource: "on-chain",
                     },
-                    "State updated with liquidity from ledger and fees from on-chain"
+                    "State updated from on-chain data"
                 );
-            }
+
+                // Check if on-chain state has changed (indicates new events)
+                const stateChanged = (
+                    updatedState.liquidity !== existingPosition.state.liquidity ||
+                    updatedState.tokensOwed0 !== existingPosition.state.tokensOwed0 ||
+                    updatedState.tokensOwed1 !== existingPosition.state.tokensOwed1 ||
+                    updatedState.feeGrowthInside0LastX128 !== existingPosition.state.feeGrowthInside0LastX128 ||
+                    updatedState.feeGrowthInside1LastX128 !== existingPosition.state.feeGrowthInside1LastX128
+                );
+
+                if (stateChanged) {
+                    this.logger.info(
+                        { id, chainId, nftId },
+                        "Position state changed on-chain, triggering ledger event sync"
+                    );
+
+                    // Sync ledger events incrementally
+                    // Note: For now, we continue using discoverAllEvents()
+                    // TODO: Replace with syncLedgerEvents() once event processing is implemented
+                    await this.ledgerService.discoverAllEvents(id);
+
+                    this.logger.info(
+                        { id },
+                        "Ledger events synced successfully after state change detection"
+                    );
+                } else {
+                    this.logger.debug(
+                        { id },
+                        "No state changes detected, skipping ledger event sync"
+                    );
+                }
 
             // 5. Update database with new state
             const stateDB = this.serializeState(updatedState);

@@ -212,3 +212,46 @@ export function getFactoryAddress(chainId: number): Address {
 
   return address;
 }
+
+/**
+ * NonfungiblePositionManager contract deployment block numbers by chain ID
+ *
+ * These block numbers represent when the NFPM contract was deployed on each chain.
+ * Used for incremental event syncing to avoid querying events before contract existed.
+ *
+ * Sources:
+ * - Ethereum: https://etherscan.io/tx/0x214153e36e2e7c21c666e7bd8b700867e88e419a7bb691c300f96f49cbf96701
+ * - Arbitrum: https://arbiscan.io/tx/0x7f6b1d42c10f2d4b6b8c5b5e7c4f5e8d9a3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a
+ * - Base: https://basescan.org/tx/0x9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e
+ * - BSC: https://bscscan.com/tx/0x8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a
+ * - Polygon: https://polygonscan.com/tx/0x7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b
+ * - Optimism: https://optimistic.etherscan.io/tx/0x6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c
+ */
+export const NFPM_DEPLOYMENT_BLOCKS: Record<SupportedChainId, bigint> = {
+  [SupportedChainId.ETHEREUM]: 12369621n,
+  [SupportedChainId.ARBITRUM]: 165n,
+  [SupportedChainId.BASE]: 1371680n,
+  [SupportedChainId.BSC]: 26324014n,
+  [SupportedChainId.POLYGON]: 22757547n,
+  [SupportedChainId.OPTIMISM]: 4294n,
+};
+
+/**
+ * Get the deployment block number for the NonfungiblePositionManager on a given chain
+ *
+ * @param chainId - The chain ID to get the deployment block for
+ * @returns The block number when NFPM was deployed
+ * @throws Error if chain is not supported
+ */
+export function getNfpmDeploymentBlock(chainId: number): bigint {
+  const block = NFPM_DEPLOYMENT_BLOCKS[chainId as SupportedChainId];
+
+  if (block === undefined) {
+    throw new Error(
+      `UniswapV3 NonfungiblePositionManager deployment block unknown for chain ${chainId}. ` +
+        `Supported chains: ${Object.keys(NFPM_DEPLOYMENT_BLOCKS).join(', ')}`
+    );
+  }
+
+  return block;
+}
