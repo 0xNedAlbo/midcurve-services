@@ -28,6 +28,15 @@ import {
 } from 'viem/chains';
 
 /**
+ * Finality configuration for a chain
+ *
+ * Determines how to check if a block is finalized.
+ */
+export type FinalityConfig =
+  | { type: 'blockTag' } // Chain supports native "finalized" block tag
+  | { type: 'blockHeight'; minBlockHeight: number }; // Fallback: block confirmations
+
+/**
  * Configuration for a single EVM chain
  */
 export interface ChainConfig {
@@ -41,6 +50,8 @@ export interface ChainConfig {
   blockExplorer?: string;
   /** Viem chain definition */
   viemChain: Chain;
+  /** Finality configuration for this chain */
+  finality: FinalityConfig;
 }
 
 /**
@@ -117,6 +128,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_ETHEREUM'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://etherscan.io',
       viemChain: mainnet,
+      finality: { type: 'blockTag' },
     });
 
     // Arbitrum
@@ -126,6 +138,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_ARBITRUM'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://arbiscan.io',
       viemChain: arbitrum,
+      finality: { type: 'blockTag' },
     });
 
     // Base
@@ -135,6 +148,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_BASE'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://basescan.org',
       viemChain: base,
+      finality: { type: 'blockTag' },
     });
 
     // BNB Smart Chain
@@ -144,6 +158,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_BSC'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://bscscan.com',
       viemChain: bsc,
+      finality: { type: 'blockTag' },
     });
 
     // Polygon
@@ -153,6 +168,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_POLYGON'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://polygonscan.com',
       viemChain: polygon,
+      finality: { type: 'blockTag' },
     });
 
     // Optimism
@@ -162,6 +178,7 @@ export class EvmConfig {
       rpcUrl: env['RPC_URL_OPTIMISM'] ?? INVALID_RPC_SENTINEL,
       blockExplorer: 'https://optimistic.etherscan.io',
       viemChain: optimism,
+      finality: { type: 'blockTag' },
     });
   }
 
@@ -269,6 +286,18 @@ export class EvmConfig {
    */
   isChainSupported(chainId: number): boolean {
     return this.chains.has(chainId);
+  }
+
+  /**
+   * Get finality configuration for a chain
+   *
+   * @param chainId - Chain ID to get finality config for
+   * @returns Finality configuration for the chain
+   * @throws Error if chain ID is not supported
+   */
+  getFinalityConfig(chainId: number): FinalityConfig {
+    const config = this.getChainConfig(chainId);
+    return config.finality;
   }
 }
 
