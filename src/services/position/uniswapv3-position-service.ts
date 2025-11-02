@@ -239,19 +239,26 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      */
     parseConfig(configDB: unknown): UniswapV3PositionConfig {
         const db = configDB as {
-            chainId: number;
-            nftId: number;
+            chainId: number | string;
+            nftId: number | string;
             poolAddress: string;
-            tickUpper: number;
-            tickLower: number;
+            tickUpper: number | string;
+            tickLower: number | string;
         };
 
+        // Defensive type conversion for JSON deserialization
+        // PostgreSQL JSON columns may return numbers as strings
+        const chainId = typeof db.chainId === 'number' ? db.chainId : Number(db.chainId);
+        const nftId = typeof db.nftId === 'number' ? db.nftId : Number(db.nftId);
+        const tickUpper = typeof db.tickUpper === 'number' ? db.tickUpper : Number(db.tickUpper);
+        const tickLower = typeof db.tickLower === 'number' ? db.tickLower : Number(db.tickLower);
+
         return {
-            chainId: db.chainId,
-            nftId: db.nftId,
+            chainId,
+            nftId,
             poolAddress: db.poolAddress,
-            tickUpper: db.tickUpper,
-            tickLower: db.tickLower,
+            tickUpper,
+            tickLower,
         };
     }
 
