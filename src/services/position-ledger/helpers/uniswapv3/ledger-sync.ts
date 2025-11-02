@@ -164,14 +164,14 @@ export async function syncLedgerEvents(
         chainId,
         nftId: nftId.toString(),
         fromBlock: fromBlock.toString(),
-        toBlock: finalizedBlock.toString(),
+        toBlock: 'latest',
       },
       'Fetching events from Etherscan'
     );
 
     const rawEvents = await etherscanClient.fetchPositionEvents(chainId, nftId.toString(), {
       fromBlock: fromBlock.toString(),
-      toBlock: finalizedBlock.toString(),
+      toBlock: 'latest',
     });
 
     logger.info(

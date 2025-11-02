@@ -1125,14 +1125,93 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     "State updated from on-chain data"
                 );
 
-                // Check if on-chain state has changed (indicates new events)
-                const stateChanged = (
-                    updatedState.liquidity !== existingPosition.state.liquidity ||
-                    updatedState.tokensOwed0 !== existingPosition.state.tokensOwed0 ||
-                    updatedState.tokensOwed1 !== existingPosition.state.tokensOwed1 ||
-                    updatedState.feeGrowthInside0LastX128 !== existingPosition.state.feeGrowthInside0LastX128 ||
-                    updatedState.feeGrowthInside1LastX128 !== existingPosition.state.feeGrowthInside1LastX128
+                // ========================================================================
+                // LAYER 2 - STEP 2A: LIQUIDITY CONSISTENCY CHECK
+                // ========================================================================
+                // Compare ledger's calculated liquidity with on-chain liquidity.
+                // If mismatch detected, it indicates missing events (likely due to
+                // Etherscan indexing lag). Force sync immediately without comparing
+                // other state fields.
+                // ========================================================================
+
+                this.logger.debug(
+                    { id },
+                    "Checking ledger liquidity consistency with on-chain state"
                 );
+
+                // Get last ledger event to extract calculated liquidity
+                const lastEvents = await this.ledgerService.findAllItems(id);
+                const lastLedgerEvent = lastEvents[0]; // Sorted DESC by timestamp
+                const ledgerLiquidity = lastLedgerEvent?.config.liquidityAfter ?? 0n;
+                const onChainLiquidity = updatedState.liquidity;
+
+                const liquidityMismatch = ledgerLiquidity !== onChainLiquidity;
+
+                if (liquidityMismatch) {
+                    this.logger.warn(
+                        {
+                            id,
+                            ledgerLiquidity: ledgerLiquidity.toString(),
+                            onChainLiquidity: onChainLiquidity.toString(),
+                            delta: (onChainLiquidity - ledgerLiquidity).toString(),
+                        },
+                        "Liquidity mismatch detected - missing events in ledger, forcing sync"
+                    );
+
+                    // Force incremental sync to catch missing events
+                    const syncResult = await syncLedgerEvents(
+                        {
+                            positionId: id,
+                            chainId,
+                            nftId: BigInt(nftId),
+                            forceFullResync: false,  // Incremental sync
+                        },
+                        {
+                            prisma: this.prisma,
+                            etherscanClient: this.etherscanClient,
+                            evmBlockService: this.evmBlockService,
+                            aprService: this.aprService,
+                            logger: this.logger,
+                            ledgerService: this.ledgerService,
+                            poolPriceService: this.poolPriceService,
+                        }
+                    );
+
+                    this.logger.info(
+                        {
+                            id,
+                            eventsAdded: syncResult.eventsAdded,
+                            fromBlock: syncResult.fromBlock.toString(),
+                            finalizedBlock: syncResult.finalizedBlock.toString(),
+                        },
+                        "Ledger events synced successfully after liquidity mismatch"
+                    );
+
+                    // Skip full state comparison - sync already happened
+                } else {
+                    this.logger.debug(
+                        {
+                            id,
+                            liquidity: ledgerLiquidity.toString(),
+                        },
+                        "Ledger liquidity consistent with on-chain - proceeding to full state check"
+                    );
+
+                    // ========================================================================
+                    // LAYER 2 - STEP 2B: FULL STATE COMPARISON
+                    // ========================================================================
+                    // Only runs if liquidity matches (no missing events).
+                    // Checks all state fields to detect other types of changes.
+                    // ========================================================================
+
+                    // Check if on-chain state has changed (indicates new events)
+                    const stateChanged = (
+                        updatedState.liquidity !== existingPosition.state.liquidity ||
+                        updatedState.tokensOwed0 !== existingPosition.state.tokensOwed0 ||
+                        updatedState.tokensOwed1 !== existingPosition.state.tokensOwed1 ||
+                        updatedState.feeGrowthInside0LastX128 !== existingPosition.state.feeGrowthInside0LastX128 ||
+                        updatedState.feeGrowthInside1LastX128 !== existingPosition.state.feeGrowthInside1LastX128
+                    );
 
                 if (stateChanged) {
                     this.logger.info(
@@ -1174,6 +1253,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         "No state changes detected, skipping ledger event sync"
                     );
                 }
+            } // End of liquidity consistency check else block
 
             // 5. Update database with new state
             const stateDB = this.serializeState(updatedState);

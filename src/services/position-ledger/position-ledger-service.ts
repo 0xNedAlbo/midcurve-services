@@ -493,6 +493,24 @@ export abstract class PositionLedgerService<
       const inputHash = this.generateInputHash(input);
       this.logger.debug({ positionId, inputHash }, 'Input hash generated');
 
+      // Check if event already exists (deduplication by inputHash)
+      const existingEvent = await this.prisma.positionLedgerEvent.findFirst({
+        where: {
+          positionId,
+          inputHash,
+        },
+      });
+
+      if (existingEvent) {
+        this.logger.info(
+          { positionId, inputHash, existingEventId: existingEvent.id },
+          'Event already exists (duplicate inputHash), skipping insert'
+        );
+        log.methodExit(this.logger, 'addItem', { id: existingEvent.id, skipped: true });
+        // Return complete history without inserting duplicate
+        return this.findAllItems(positionId);
+      }
+
       // Serialize config and state
       const configDB = this.serializeConfig(input.config);
       const stateDB = this.serializeState(input.state);
