@@ -38,6 +38,7 @@ import { UniswapV3PositionLedgerService } from "../position-ledger/uniswapv3-pos
 import { UniswapV3QuoteTokenService } from "../quote-token/uniswapv3-quote-token-service.js";
 import { EvmBlockService } from "../block/evm-block-service.js";
 import { PositionAprService } from "../position-apr/position-apr-service.js";
+import { UniswapV3PoolPriceService } from "../pool-price/uniswapv3-pool-price-service.js";
 import type { Address } from "viem";
 import {
     computeFeeGrowthInside,
@@ -50,9 +51,7 @@ import {
     calculatePoolPriceInQuoteToken,
     calculateTokenValueInQuote,
 } from "../../utils/uniswapv3/ledger-calculations.js";
-// TODO: Use these helpers when refactoring discover() and reset() methods
-// import { refreshAprPeriods } from "./helpers/uniswapv3/apr-periods.js";
-// import { syncLedgerEvents } from "../position-ledger/helpers/uniswapv3/ledger-sync.js";
+import { syncLedgerEvents } from "../position-ledger/helpers/uniswapv3/ledger-sync.js";
 
 /**
  * Dependencies for UniswapV3PositionService
@@ -106,6 +105,12 @@ export interface UniswapV3PositionServiceDependencies {
      * If not provided, a new PositionAprService instance will be created
      */
     aprService?: PositionAprService;
+
+    /**
+     * Pool price service for historic price discovery at ledger event blocks
+     * If not provided, a new UniswapV3PoolPriceService instance will be created
+     */
+    poolPriceService?: UniswapV3PoolPriceService;
 }
 
 /**
@@ -122,6 +127,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
     private readonly _quoteTokenService: UniswapV3QuoteTokenService;
     private readonly _evmBlockService: EvmBlockService;
     private readonly _aprService: PositionAprService;
+    private readonly _poolPriceService: UniswapV3PoolPriceService;
 
     /**
      * Creates a new UniswapV3PositionService instance
@@ -157,6 +163,9 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
         this._aprService =
             dependencies.aprService ??
             new PositionAprService({ prisma: this.prisma });
+        this._poolPriceService =
+            dependencies.poolPriceService ??
+            new UniswapV3PoolPriceService({ prisma: this.prisma });
     }
 
     /**
@@ -206,6 +215,13 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      */
     protected get aprService(): PositionAprService {
         return this._aprService;
+    }
+
+    /**
+     * Get the pool price service instance
+     */
+    protected get poolPriceService(): UniswapV3PoolPriceService {
+        return this._poolPriceService;
     }
 
     // ============================================================================
@@ -745,11 +761,32 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     "Discovering ledger events from blockchain"
                 );
 
-                // Discover all events (automatically triggers APR calculation)
-                await this.ledgerService.discoverAllEvents(createdPosition.id);
+                // Full sync from NFPM deployment block (new position)
+                const syncResult = await syncLedgerEvents(
+                    {
+                        positionId: createdPosition.id,
+                        chainId: createdPosition.config.chainId,
+                        nftId: BigInt(createdPosition.config.nftId),
+                        forceFullResync: true,  // New position - full sync
+                    },
+                    {
+                        prisma: this.prisma,
+                        etherscanClient: this.etherscanClient,
+                        evmBlockService: this.evmBlockService,
+                        aprService: this.aprService,
+                        logger: this.logger,
+                        ledgerService: this.ledgerService,
+                        poolPriceService: this.poolPriceService,
+                    }
+                );
 
                 this.logger.info(
-                    { positionId: createdPosition.id },
+                    {
+                        positionId: createdPosition.id,
+                        eventsAdded: syncResult.eventsAdded,
+                        fromBlock: syncResult.fromBlock.toString(),
+                        finalizedBlock: syncResult.finalizedBlock.toString(),
+                    },
                     "Ledger events discovered successfully"
                 );
             } catch (error) {
@@ -1103,13 +1140,32 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         "Position state changed on-chain, triggering ledger event sync"
                     );
 
-                    // Sync ledger events incrementally
-                    // Note: For now, we continue using discoverAllEvents()
-                    // TODO: Replace with syncLedgerEvents() once event processing is implemented
-                    await this.ledgerService.discoverAllEvents(id);
+                    // Incremental sync from last event block
+                    const syncResult = await syncLedgerEvents(
+                        {
+                            positionId: id,
+                            chainId,
+                            nftId: BigInt(nftId),
+                            forceFullResync: false,  // Incremental sync
+                        },
+                        {
+                            prisma: this.prisma,
+                            etherscanClient: this.etherscanClient,
+                            evmBlockService: this.evmBlockService,
+                            aprService: this.aprService,
+                            logger: this.logger,
+                            ledgerService: this.ledgerService,
+                            poolPriceService: this.poolPriceService,
+                        }
+                    );
 
                     this.logger.info(
-                        { id },
+                        {
+                            id,
+                            eventsAdded: syncResult.eventsAdded,
+                            fromBlock: syncResult.fromBlock.toString(),
+                            finalizedBlock: syncResult.finalizedBlock.toString(),
+                        },
                         "Ledger events synced successfully after state change detection"
                     );
                 } else {
@@ -1282,7 +1338,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
 
             // 2. Rediscover all ledger events from blockchain
             // This automatically:
-            // - Deletes existing events (via deleteAllItems in discoverAllEvents)
+            // - Deletes events >= fromBlock (via syncLedgerEvents)
             // - Fetches fresh events from Etherscan
             // - Calculates PnL sequentially
             // - Triggers APR period calculation
@@ -1291,10 +1347,31 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Deleting old events and rediscovering from blockchain"
             );
 
-            await this.ledgerService.discoverAllEvents(id);
+            const syncResult = await syncLedgerEvents(
+                {
+                    positionId: id,
+                    chainId: existingPosition.config.chainId,
+                    nftId: BigInt(existingPosition.config.nftId),
+                    forceFullResync: true,  // Full reset - resync from NFPM deployment
+                },
+                {
+                    prisma: this.prisma,
+                    etherscanClient: this.etherscanClient,
+                    evmBlockService: this.evmBlockService,
+                    aprService: this.aprService,
+                    logger: this.logger,
+                    ledgerService: this.ledgerService,
+                    poolPriceService: this.poolPriceService,
+                }
+            );
 
             this.logger.info(
-                { positionId: id },
+                {
+                    positionId: id,
+                    eventsAdded: syncResult.eventsAdded,
+                    fromBlock: syncResult.fromBlock.toString(),
+                    finalizedBlock: syncResult.finalizedBlock.toString(),
+                },
                 "Ledger events rediscovered and APR periods recalculated"
             );
 

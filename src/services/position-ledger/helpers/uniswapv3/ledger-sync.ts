@@ -10,8 +10,19 @@ import type { Logger } from 'pino';
 import type { EtherscanClient } from '../../../../clients/etherscan/index.js';
 import type { EvmBlockService } from '../../../block/evm-block-service.js';
 import type { PositionAprService } from '../../../position-apr/position-apr-service.js';
+import type { UniswapV3PositionLedgerService } from '../../uniswapv3-position-ledger-service.js';
+import type { UniswapV3PoolPriceService } from '../../../pool-price/uniswapv3-pool-price-service.js';
 import { getNfpmDeploymentBlock } from '../../../../config/uniswapv3.js';
 import type { RawPositionEvent } from '../../../../clients/etherscan/types.js';
+import { calculatePoolPriceInQuoteToken } from '../../../../utils/uniswapv3/ledger-calculations.js';
+import { fetchPoolWithTokens } from './pool-metadata.js';
+import {
+  buildInitialState,
+  extractPreviousEventId,
+} from './state-builder.js';
+import { sortRawEventsByBlockchain } from './event-sorting.js';
+import { getHistoricPoolPrice } from './pool-price-fetcher.js';
+import { buildEventInput } from './event-builder.js';
 
 /**
  * Parameters for syncLedgerEvents function
@@ -53,6 +64,10 @@ export interface LedgerSyncDependencies {
   aprService: PositionAprService;
   /** Logger instance */
   logger: Logger;
+  /** Ledger service for adding events to database */
+  ledgerService: UniswapV3PositionLedgerService;
+  /** Pool price service for historic price discovery */
+  poolPriceService: UniswapV3PoolPriceService;
 }
 
 /**
@@ -179,7 +194,7 @@ export async function syncLedgerEvents(
     const eventsAdded = await processAndSaveEvents(
       positionId,
       rawEvents,
-      logger
+      deps
     );
 
     logger.info(
@@ -306,32 +321,151 @@ async function deleteEventsFromBlock(
 /**
  * Process and save raw events sequentially
  *
- * Placeholder function for event processing.
- * The actual implementation will be integrated when refactoring the ledger service.
+ * Orchestrates the complete event processing pipeline:
+ * 1. Fetches position and pool metadata
+ * 2. Gets last event for state initialization
+ * 3. Sorts events chronologically
+ * 4. For each event:
+ *    - Discovers historic pool price at event block
+ *    - Calculates pool price value in quote token
+ *    - Builds event input with all financial calculations
+ *    - Saves to database
+ *    - Updates state for next iteration
  *
  * @param positionId - Position database ID
- * @param rawEvents - Raw events from Etherscan (already sorted)
- * @param logger - Logger instance
+ * @param rawEvents - Raw events from Etherscan
+ * @param deps - Service dependencies
  * @returns Number of events successfully saved
  */
 async function processAndSaveEvents(
   positionId: string,
   rawEvents: RawPositionEvent[],
-  logger: Logger
+  deps: LedgerSyncDependencies
 ): Promise<number> {
-  // TODO: Implement proper event processing
-  // This will be implemented when integrating with the refactored ledger service.
-  // The service will handle:
-  // - Fetching pool metadata
-  // - Discovering historic pool prices
-  // - Building events from raw data
-  // - Calculating financial state
-  // - Saving events in chronological order
+  const { prisma, ledgerService, poolPriceService, logger } = deps;
 
-  logger.warn(
+  logger.debug(
     { positionId, rawEventCount: rawEvents.length },
-    'processAndSaveEvents: Implementation pending (placeholder)'
+    'Starting event processing'
   );
 
-  return 0;
+  // 1. Get poolId from position
+  const position = await prisma.position.findUnique({
+    where: { id: positionId },
+    select: { poolId: true },
+  });
+
+  if (!position) {
+    throw new Error(`Position not found: ${positionId}`);
+  }
+
+  const poolId = position.poolId;
+
+  // 2. Fetch pool metadata (tokens, decimals, quote designation)
+  const poolMetadata = await fetchPoolWithTokens(poolId, prisma, logger);
+
+  // 3. Get last existing event for state initialization
+  const existingEvents = await ledgerService.findAllItems(positionId);
+  const lastEvent = existingEvents[0]; // Newest first (descending order)
+
+  // 4. Build initial state from last event
+  let previousState = buildInitialState(lastEvent);
+  let previousEventId = extractPreviousEventId(lastEvent);
+
+  // 5. Sort raw events chronologically (ascending by block → tx → log index)
+  const sortedEvents = sortRawEventsByBlockchain(rawEvents);
+
+  logger.debug(
+    {
+      positionId,
+      poolId,
+      lastEventId: lastEvent?.id ?? null,
+      sortedEventCount: sortedEvents.length,
+    },
+    'Initialized processing state'
+  );
+
+  // 6. Process each event sequentially
+  let eventsAdded = 0;
+
+  for (const rawEvent of sortedEvents) {
+    logger.debug(
+      {
+        positionId,
+        blockNumber: rawEvent.blockNumber.toString(),
+        txIndex: rawEvent.transactionIndex,
+        logIndex: rawEvent.logIndex,
+        eventType: rawEvent.eventType,
+      },
+      'Processing event'
+    );
+
+    // 6a. Get historic pool price at event block
+    const historicPrice = await getHistoricPoolPrice(
+      poolId,
+      rawEvent.blockNumber,
+      poolPriceService,
+      logger
+    );
+
+    // 6b. Calculate pool price value in quote token
+    const poolPriceValue = calculatePoolPriceInQuoteToken(
+      historicPrice.sqrtPriceX96,
+      poolMetadata.token0IsQuote,
+      poolMetadata.token0Decimals,
+      poolMetadata.token1Decimals
+    );
+
+    // 6c. Build event input with financial calculations
+    const eventInput = buildEventInput({
+      rawEvent,
+      previousState,
+      poolMetadata,
+      sqrtPriceX96: historicPrice.sqrtPriceX96,
+      previousEventId,
+      positionId,
+      poolPrice: poolPriceValue,
+    });
+
+    // 6d. Save event to database
+    const updatedEvents = await ledgerService.addItem(positionId, eventInput);
+
+    // 6e. Update state for next iteration
+    const justAddedEvent = updatedEvents[0]; // Newest first (just added)
+    if (!justAddedEvent) {
+      throw new Error(`Failed to save event for position ${positionId}`);
+    }
+    previousEventId = justAddedEvent.id;
+
+    // Extract state from the event input config
+    previousState = {
+      uncollectedPrincipal0: eventInput.config.uncollectedPrincipal0After,
+      uncollectedPrincipal1: eventInput.config.uncollectedPrincipal1After,
+      liquidity: eventInput.config.liquidityAfter,
+      costBasis: eventInput.costBasisAfter,
+      pnl: eventInput.pnlAfter,
+    };
+
+    eventsAdded++;
+
+    logger.debug(
+      {
+        positionId,
+        eventId: previousEventId,
+        blockNumber: rawEvent.blockNumber.toString(),
+        eventType: rawEvent.eventType,
+        costBasisAfter: previousState.costBasis.toString(),
+        pnlAfter: previousState.pnl.toString(),
+        liquidityAfter: previousState.liquidity.toString(),
+      },
+      'Event saved successfully'
+    );
+  }
+
+  logger.info(
+    { positionId, eventsAdded, totalRawEvents: rawEvents.length },
+    'Event processing completed'
+  );
+
+  return eventsAdded;
 }
