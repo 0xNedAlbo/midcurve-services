@@ -152,9 +152,13 @@ export function calculateTokenValueInQuote(
   token0Decimals: number,
   token1Decimals: number
 ): bigint {
+  // Convert sqrtPriceX96 to bigint if it's a string (from database)
+  // This handles cases where Prisma returns bigint fields as strings from JSON columns
+  const sqrtPriceX96BigInt = typeof sqrtPriceX96 === 'string' ? BigInt(sqrtPriceX96) : sqrtPriceX96;
+
   // Get pool price in quote units per base
   const poolPrice = calculatePoolPriceInQuoteToken(
-    sqrtPriceX96,
+    sqrtPriceX96BigInt,
     token0IsQuote,
     token0Decimals,
     token1Decimals

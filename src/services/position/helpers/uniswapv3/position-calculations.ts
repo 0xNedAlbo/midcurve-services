@@ -59,7 +59,7 @@ export async function getLedgerSummary(
         costBasis: 0n,
         realizedPnl: 0n,
         collectedFees: 0n,
-        lastFeesCollectedAt: new Date(), // Will be set to positionOpenedAt by caller
+        lastFeesCollectedAt: new Date(0), // Epoch time - signals no collections yet
       };
     }
 
@@ -90,7 +90,7 @@ export async function getLedgerSummary(
       costBasis: latestEvent.costBasisAfter,
       realizedPnl: latestEvent.pnlAfter,
       collectedFees,
-      lastFeesCollectedAt: lastFeesCollectedAt ?? new Date(),
+      lastFeesCollectedAt: lastFeesCollectedAt ?? new Date(0), // Epoch time - signals no collections yet
     };
   } catch (error) {
     logger.warn(
@@ -101,7 +101,7 @@ export async function getLedgerSummary(
       costBasis: 0n,
       realizedPnl: 0n,
       collectedFees: 0n,
-      lastFeesCollectedAt: new Date(),
+      lastFeesCollectedAt: new Date(0), // Epoch time - signals no collections yet
     };
   }
 }

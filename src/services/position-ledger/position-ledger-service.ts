@@ -461,6 +461,57 @@ export abstract class PositionLedgerService<
   }
 
   /**
+   * Get the most recent ledger event for a position
+   *
+   * Events are returned from findAllItems() sorted in DESCENDING order by timestamp,
+   * so the first element is always the most recent event.
+   *
+   * IMPORTANT: This ordering is critical for correctness. The most recent event contains
+   * the final state after all historical operations (INCREASE, DECREASE, COLLECT).
+   *
+   * All event types (INCREASE_POSITION, DECREASE_POSITION, COLLECT) include final state
+   * in their config (e.g., liquidityAfter, feeGrowthInside0LastX128, etc.). Even COLLECT
+   * events pass through the liquidity value from the previous event.
+   *
+   * @param positionId - Position database ID
+   * @returns Most recent event, or null if no events exist
+   */
+  async getMostRecentEvent(
+    positionId: string
+  ): Promise<PositionLedgerEvent<P> | null> {
+    log.methodEntry(this.logger, 'getMostRecentEvent', { positionId });
+
+    try {
+      const events = await this.findAllItems(positionId);
+
+      if (events.length === 0) {
+        log.methodExit(this.logger, 'getMostRecentEvent', {
+          positionId,
+          found: false,
+        });
+        return null;
+      }
+
+      // First element is most recent (DESC order by timestamp)
+      const mostRecentEvent = events[0]!;
+
+      log.methodExit(this.logger, 'getMostRecentEvent', {
+        positionId,
+        eventId: mostRecentEvent.id,
+        eventType: mostRecentEvent.eventType,
+        timestamp: mostRecentEvent.timestamp,
+      });
+
+      return mostRecentEvent;
+    } catch (error) {
+      log.methodError(this.logger, 'getMostRecentEvent', error as Error, {
+        positionId,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Add a new event to position ledger
    *
    * Validates event sequence and saves to database.

@@ -240,7 +240,7 @@ model Position {
     // Cash flow related fields (stored as string for bigint precision)
     collectedFees       String // bigint as string
     unClaimedFees       String // bigint as string
-    lastFeesCollectedAt DateTime
+    lastFeesCollectedAt DateTime? // null = no fees collected yet
 
     // Price range (stored as string for bigint precision)
     priceRangeLower String // bigint as string

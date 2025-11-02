@@ -796,6 +796,45 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     },
                     "Ledger events discovered successfully"
                 );
+
+                // Update position state from the last ledger event
+                // The sync creates ledger events but doesn't update position state
+                // We need to apply the final state changes (liquidity, checkpoints) from the last event
+                if (syncResult.eventsAdded > 0) {
+                    // Get most recent event using ledger service helper
+                    // This ensures correct event ordering (DESC by timestamp)
+                    const mostRecentEvent = await this.ledgerService.getMostRecentEvent(createdPosition.id);
+
+                    if (mostRecentEvent) {
+                        const eventConfig = mostRecentEvent.config as { liquidityAfter?: string | bigint; feeGrowthInside0LastX128?: string | bigint; feeGrowthInside1LastX128?: string | bigint; };
+
+                        // Read current position state
+                        const currentPosition = await this.findById(createdPosition.id);
+                        if (!currentPosition) {
+                            throw new Error(`Position ${createdPosition.id} not found after sync`);
+                        }
+
+                        // Update liquidity from most recent event
+                        const finalLiquidity = typeof eventConfig.liquidityAfter === "string" ? BigInt(eventConfig.liquidityAfter) : eventConfig.liquidityAfter;
+
+                        if (finalLiquidity !== undefined) {
+                            currentPosition.state.liquidity = finalLiquidity;
+                        } else {
+                            this.logger.warn({ positionId: createdPosition.id, eventType: mostRecentEvent.eventType }, "Most recent event has no liquidityAfter - skipping update");
+                        }
+
+                        // Update position state in database
+                        const stateDB = this.serializeState(currentPosition.state);
+
+                        await this.prisma.position.update({
+                            where: { id: createdPosition.id },
+                            data: { state: stateDB as object },
+                        });
+
+                        // Update the createdPosition reference with new state
+                        createdPosition.state.liquidity = currentPosition.state.liquidity;
+                    }
+                }
             } catch (error) {
                 this.logger.warn(
                     { error, positionId: createdPosition.id },
@@ -2080,20 +2119,138 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Ledger event created"
             );
 
-            // 14. Calculate and update position common fields
+            // 13.5. Sync historical events from blockchain
+            // This discovers any COLLECT events that happened between position opening and import
+            // and updates the fee growth checkpoints to their correct values
             this.logger.debug(
                 { positionId: createdPosition.id },
+                "Syncing historical events from blockchain to build complete ledger"
+            );
+
+            const { syncLedgerEvents } = await import(
+                "../position-ledger/helpers/uniswapv3/ledger-sync.js"
+            );
+
+            const syncResult = await syncLedgerEvents(
+                {
+                    positionId: createdPosition.id,
+                    chainId,
+                    nftId: BigInt(nftId),
+                    forceFullResync: true, // Full resync to catch all historical events
+                },
+                {
+                    prisma: this.prisma,
+                    etherscanClient: this.etherscanClient,
+                    evmBlockService: this.evmBlockService,
+                    aprService: this.aprService,
+                    logger: this.logger,
+                    ledgerService: this.ledgerService,
+                    poolPriceService: this.poolPriceService,
+                }
+            );
+
+            this.logger.info(
+                {
+                    positionId: createdPosition.id,
+                    eventsAdded: syncResult.eventsAdded,
+                    fromBlock: syncResult.fromBlock.toString(),
+                    finalizedBlock: syncResult.finalizedBlock.toString(),
+                },
+                "Historical events synced successfully during import"
+            );
+
+            // Update position state from the last ledger event
+            // The sync creates ledger events but doesn't update position state
+            // We need to apply the final state changes (liquidity, checkpoints) from the last event
+            if (syncResult.eventsAdded > 0) {
+                this.logger.debug(
+                    { positionId: createdPosition.id },
+                    "Updating position state from last ledger event after sync"
+                );
+
+                // Get the last ledger event to extract final state
+                const allEvents = await this.ledgerService.findAllItems(
+                    createdPosition.id
+                );
+                const lastEvent =
+                    allEvents.length > 0
+                        ? allEvents[allEvents.length - 1]
+                        : null;
+
+                if (lastEvent) {
+                    const lastEventConfig = lastEvent.config as {
+                        liquidityAfter?: string | bigint;
+                        feeGrowthInside0LastX128?: string | bigint;
+                        feeGrowthInside1LastX128?: string | bigint;
+                    };
+
+                    // Read current position state
+                    const currentPosition = await this.findById(
+                        createdPosition.id
+                    );
+                    if (!currentPosition) {
+                        throw new Error(
+                            `Position ${createdPosition.id} not found after sync`
+                        );
+                    }
+
+                    // Update liquidity from last event
+                    const finalLiquidity =
+                        typeof lastEventConfig.liquidityAfter === "string"
+                            ? BigInt(lastEventConfig.liquidityAfter)
+                            : lastEventConfig.liquidityAfter;
+
+                    if (finalLiquidity !== undefined) {
+                        currentPosition.state.liquidity = finalLiquidity;
+
+                        this.logger.debug(
+                            {
+                                positionId: createdPosition.id,
+                                newLiquidity: finalLiquidity.toString(),
+                            },
+                            "Updated position liquidity from last ledger event"
+                        );
+                    }
+
+                    // Update position state in database
+                    const stateDB = this.serializeState(currentPosition.state);
+
+                    await this.prisma.position.update({
+                        where: { id: createdPosition.id },
+                        data: {
+                            state: stateDB as object,
+                        },
+                    });
+
+                    this.logger.info(
+                        { positionId: createdPosition.id },
+                        "Position state updated after historical sync"
+                    );
+                }
+            }
+
+            // Re-fetch position with updated state after sync
+            const updatedPosition = await this.findById(createdPosition.id);
+            if (!updatedPosition) {
+                throw new Error(
+                    `Position ${createdPosition.id} not found after sync`
+                );
+            }
+
+            // 14. Calculate and update position common fields
+            this.logger.debug(
+                { positionId: updatedPosition.id },
                 "Calculating position common fields"
             );
 
             // Get ledger summary (cost basis, PnL, fees)
             const ledgerSummary = await this.getLedgerSummary(
-                createdPosition.id
+                updatedPosition.id
             );
 
             // Calculate current position value (using current pool price, not historic)
             const currentValue = this.calculateCurrentPositionValue(
-                createdPosition,
+                updatedPosition,
                 pool
             );
 
@@ -2102,16 +2259,16 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
 
             // Calculate unclaimed fees
             const unClaimedFees = await this.calculateUnclaimedFees(
-                createdPosition,
+                updatedPosition,
                 pool
             );
 
             // Calculate price range
             const { priceRangeLower, priceRangeUpper } =
-                this.calculatePriceRange(createdPosition, pool);
+                this.calculatePriceRange(updatedPosition, pool);
 
             // Update position with calculated fields
-            await this.updatePositionCommonFields(createdPosition.id, {
+            await this.updatePositionCommonFields(updatedPosition.id, {
                 currentValue,
                 currentCostBasis: ledgerSummary.costBasis,
                 realizedPnl: ledgerSummary.realizedPnl,
@@ -2120,7 +2277,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 unClaimedFees,
                 lastFeesCollectedAt:
                     ledgerSummary.lastFeesCollectedAt.getTime() === 0
-                        ? createdPosition.positionOpenedAt
+                        ? updatedPosition.positionOpenedAt
                         : ledgerSummary.lastFeesCollectedAt,
                 priceRangeLower,
                 priceRangeUpper,
@@ -2128,22 +2285,23 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
 
             this.logger.info(
                 {
-                    positionId: createdPosition.id,
+                    positionId: updatedPosition.id,
                     currentValue: currentValue.toString(),
                     costBasis: ledgerSummary.costBasis.toString(),
                     unrealizedPnl: unrealizedPnl.toString(),
+                    unClaimedFees: unClaimedFees.toString(),
                 },
                 "Position common fields calculated and updated"
             );
 
             log.methodExit(this.logger, "createPositionFromUserData", {
-                id: createdPosition.id,
+                id: updatedPosition.id,
                 duplicate: false,
             });
 
             // Re-fetch position with updated fields
-            const finalPosition = await this.findById(createdPosition.id);
-            return finalPosition ?? createdPosition;
+            const finalPosition = await this.findById(updatedPosition.id);
+            return finalPosition ?? updatedPosition;
         } catch (error) {
             // Only log if not already logged
             if (
@@ -2556,8 +2714,11 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 };
             }
 
-            // Latest event is first (descending order) - safe to use ! since we checked length
-            const latestEvent = events[0]!;
+            // Get most recent event using ledger service helper
+            const latestEvent = await this.ledgerService.getMostRecentEvent(positionId);
+            if (!latestEvent) {
+                throw new Error(`Expected to find events but got null`);
+            }
 
             // Sum all COLLECT event rewards for collected fees
             let collectedFees = 0n;
