@@ -2800,7 +2800,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      * @param positionId - Position ID
      * @returns Current liquidity (0n if no events exist or position is closed)
      */
-    private async getCurrentLiquidityFromLedger(
+    public async getCurrentLiquidityFromLedger(
         positionId: string
     ): Promise<bigint> {
         const lastEvent = await this.prisma.positionLedgerEvent.findFirst({
@@ -2846,7 +2846,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      * @param positionId - Position ID
      * @returns Timestamp of the closing COLLECT event, or null if position is not fully closed
      */
-    private async getPositionCloseTimestamp(
+    public async getPositionCloseTimestamp(
         positionId: string
     ): Promise<Date | null> {
         const lastEvent = await this.prisma.positionLedgerEvent.findFirst({

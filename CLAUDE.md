@@ -1265,6 +1265,513 @@ if (isValidAddress(userInputAddress)) {
 
 ---
 
+## UniswapV3 Position Ledger Architecture
+
+### Incremental Event Syncing
+
+The UniswapV3 Position Ledger Service implements an **incremental event syncing strategy** with finalized block boundaries to efficiently track position events while avoiding blockchain reorganization issues.
+
+#### Key Design Principles
+
+1. **Finalized Blocks Only** - Never sync beyond the last finalized block to avoid reorg issues
+2. **Incremental Updates** - Only fetch new events since the last sync (not full history every time)
+3. **Delete and Re-Fetch** - When syncing from a block, delete events >= that block first (ensures clean state)
+4. **State Reconstruction** - Each event builds upon the previous event's financial state
+5. **Stateless Helpers** - All calculation logic extracted to independently testable helper functions
+
+#### How `syncLedgerEvents()` Works
+
+The `syncLedgerEvents()` function is the main orchestrator for event discovery and processing:
+
+**Step 1: Get Finalized Block**
+```typescript
+const finalizedBlock = await evmBlockService.getLastFinalizedBlockNumber(chainId);
+```
+- Queries the chain for the last finalized block number
+- Finalized blocks are confirmed and won't be reorganized
+- Ethereum: ~15 minutes behind head (~64 blocks)
+- Arbitrum/Optimism: ~5-10 minutes
+
+**Step 2: Determine `fromBlock`**
+
+For **incremental sync** (`forceFullResync: false`):
+```typescript
+const lastEvent = await getLastLedgerEvent(positionId);
+const lastEventBlock = lastEvent?.config.blockNumber ?? null;
+const nfpmBlock = getNfpmDeploymentBlock(chainId);
+
+// MIN(lastEventBlock || nfpmBlock, finalizedBlock)
+const startBlock = lastEventBlock !== null ? lastEventBlock : nfpmBlock;
+fromBlock = startBlock < finalizedBlock ? startBlock : finalizedBlock;
+```
+
+Logic:
+- If position has events: Start from last event's block number
+- If position has no events: Start from NFPM deployment block
+- Never go beyond finalized block (avoid reorg issues)
+
+For **full resync** (`forceFullResync: true`):
+```typescript
+fromBlock = getNfpmDeploymentBlock(chainId);
+```
+
+Logic:
+- Always start from NFPM deployment block
+- Used for `discover()` (new positions) and `reset()` (rebuild from scratch)
+
+**Step 3: Delete Events >= `fromBlock`**
+```typescript
+await deleteEventsFromBlock(positionId, fromBlock, prisma, logger);
+```
+
+Why delete and re-fetch?
+- Ensures clean state (no duplicate or partial events)
+- Handles blockchain reorgs (if they occurred before finalization)
+- Simpler than checking for duplicates or partial state
+
+**Step 4: Fetch New Events**
+```typescript
+const rawEvents = await etherscanClient.fetchPositionEvents(chainId, nftId, {
+  fromBlock: fromBlock.toString(),
+  toBlock: finalizedBlock.toString(),
+});
+```
+
+- Queries Etherscan/block explorer for position events in block range
+- Returns raw events: INCREASE_LIQUIDITY, DECREASE_LIQUIDITY, COLLECT
+- Events include block number, transaction hash, amounts, liquidity changes
+
+**Step 5: Process and Save Events**
+```typescript
+const eventsAdded = await processAndSaveEvents(positionId, rawEvents, deps);
+```
+
+For each event:
+1. Fetch pool metadata (tokens, decimals, quote designation)
+2. Get last event's state (cost basis, PnL, liquidity, uncollected principal)
+3. Sort events chronologically (block → tx → log index)
+4. For each event:
+   - Discover historic pool price at event block
+   - Calculate pool price value in quote token
+   - Build event input using event processor helpers
+   - Save to database
+   - Update state for next event
+
+**Step 6: Refresh APR Periods**
+```typescript
+await aprService.refresh(positionId);
+```
+
+- Recalculates APR periods based on updated ledger events
+- Updates position's APR/fee metrics
+
+#### Event Processing Pipeline
+
+The `processAndSaveEvents()` function implements the complete event processing pipeline:
+
+```typescript
+async function processAndSaveEvents(
+  positionId: string,
+  rawEvents: RawPositionEvent[],
+  deps: LedgerSyncDependencies
+): Promise<number>
+```
+
+**Pipeline Steps:**
+
+1. **Fetch Position & Pool Metadata**
+   ```typescript
+   const position = await prisma.position.findUnique({ where: { id: positionId } });
+   const poolMetadata = await fetchPoolWithTokens(poolId, prisma, logger);
+   ```
+   - Gets poolId from position
+   - Fetches pool with token0/token1 (decimals, quote designation)
+
+2. **Initialize State**
+   ```typescript
+   const existingEvents = await ledgerService.findAllItems(positionId);
+   const lastEvent = existingEvents[0]; // Newest first
+   let previousState = buildInitialState(lastEvent);
+   let previousEventId = extractPreviousEventId(lastEvent);
+   ```
+   - Fetches last event to determine starting state
+   - If no events: state = zeros (new position)
+   - If events exist: state = last event's "after" values
+
+3. **Sort Events Chronologically**
+   ```typescript
+   const sortedEvents = sortRawEventsByBlockchain(rawEvents);
+   ```
+   - Sorts by block number → transaction index → log index
+   - Ensures correct chronological order for state reconstruction
+
+4. **Process Each Event Sequentially**
+   ```typescript
+   for (const rawEvent of sortedEvents) {
+     // 4a. Get historic pool price at event block
+     const historicPrice = await getHistoricPoolPrice(
+       poolId,
+       rawEvent.blockNumber,
+       poolPriceService,
+       logger
+     );
+
+     // 4b. Calculate pool price value in quote token
+     const poolPriceValue = calculatePoolPriceInQuoteToken(
+       historicPrice.sqrtPriceX96,
+       poolMetadata.token0IsQuote,
+       poolMetadata.token0Decimals,
+       poolMetadata.token1Decimals
+     );
+
+     // 4c. Build event input with all financial calculations
+     const eventInput = buildEventInput({
+       rawEvent,
+       previousState,
+       poolMetadata,
+       sqrtPriceX96: historicPrice.sqrtPriceX96,
+       previousEventId,
+       positionId,
+       poolPrice: poolPriceValue,
+     });
+
+     // 4d. Save to database
+     const updatedEvents = await ledgerService.addItem(positionId, eventInput);
+
+     // 4e. Update state for next iteration
+     const justAddedEvent = updatedEvents[0];
+     previousEventId = justAddedEvent.id;
+     previousState = extractStateFromEventInput(eventInput);
+   }
+   ```
+
+#### Helper Organization
+
+All calculation and processing logic is extracted to modular helper files for testability and maintainability:
+
+**Location:** `src/services/position-ledger/helpers/uniswapv3/`
+
+**Directory Structure:**
+```
+helpers/uniswapv3/
+├── ledger-sync.ts                     # Main orchestrator (syncLedgerEvents)
+├── position-metadata.ts               # Fetch position from DB, validate protocol
+├── pool-metadata.ts                   # Fetch pool + tokens, determine quote token
+├── pool-price-fetcher.ts              # Discover historic pool prices
+├── event-builder.ts                   # Build complete event input (orchestrates processors)
+├── event-sorting.ts                   # Sort events by blockchain order
+├── state-builder.ts                   # Build initial state, extract previous event ID
+├── event-processors/                  # Event type-specific financial logic
+│   ├── increase-liquidity.ts          # Process INCREASE_LIQUIDITY events
+│   ├── decrease-liquidity.ts          # Process DECREASE_LIQUIDITY events
+│   └── collect.ts                     # Process COLLECT events
+└── index.ts                           # Barrel exports
+```
+
+**When to Use Which Helper:**
+
+| Helper | Purpose | Used By | Testability |
+|--------|---------|---------|-------------|
+| `ledger-sync.ts` | Orchestrates full sync flow | Position service (`discover`, `refresh`, `reset`) | Integration tests |
+| `position-metadata.ts` | Validates position, extracts config | `processAndSaveEvents` | Unit tests (mock Prisma) |
+| `pool-metadata.ts` | Fetches pool + tokens, determines quote | `processAndSaveEvents` | Unit tests (mock Prisma) |
+| `pool-price-fetcher.ts` | Gets historic price at block | `processAndSaveEvents` | Unit tests (mock pool price service) |
+| `event-builder.ts` | Orchestrates event processors | `processAndSaveEvents` | Unit tests (mock processors) |
+| `event-sorting.ts` | Sorts events chronologically | `processAndSaveEvents` | Unit tests (pure function) |
+| `state-builder.ts` | Builds initial state from last event | `processAndSaveEvents` | Unit tests (pure function) |
+| `increase-liquidity.ts` | Calculates cost basis increase | `event-builder.ts` | Unit tests (pure function) |
+| `decrease-liquidity.ts` | Realizes PnL, adds uncollected principal | `event-builder.ts` | Unit tests (pure function) |
+| `collect.ts` | Separates fees from principal | `event-builder.ts` | Unit tests (pure function) |
+
+**Dependency Injection Pattern:**
+
+All helpers accept dependencies as parameters (not singletons):
+
+```typescript
+// ✅ Correct - Dependencies injected
+export async function syncLedgerEvents(
+  params: SyncLedgerEventsParams,
+  deps: LedgerSyncDependencies
+): Promise<SyncLedgerEventsResult> {
+  const { prisma, etherscanClient, evmBlockService, aprService, logger } = deps;
+  // Use dependencies
+}
+
+// ❌ Wrong - Singleton dependencies
+const prisma = new PrismaClient(); // Global singleton
+export async function syncLedgerEvents(params: SyncLedgerEventsParams) {
+  // Uses global prisma
+}
+```
+
+Benefits:
+- Testable with mocks
+- No global state
+- Multiple instances possible
+- Clear dependency tree
+
+---
+
+### 15-Second Refresh Cache
+
+The UniswapV3 Position Service implements a **15-second refresh cache** to avoid redundant on-chain calls when position data is recently updated.
+
+#### How It Works
+
+When `refresh()` is called, the service checks the position's `updatedAt` timestamp:
+
+```typescript
+// Check if position was updated recently (< 15 seconds ago)
+const now = new Date();
+const positionAge = now.getTime() - position.updatedAt.getTime();
+const CACHE_DURATION_MS = 15_000; // 15 seconds
+
+if (positionAge < CACHE_DURATION_MS) {
+  logger.info(
+    { positionId, positionAge, cacheDuration: CACHE_DURATION_MS },
+    'Position updated recently, returning cached data'
+  );
+  return position; // Return cached position without on-chain call
+}
+```
+
+#### When Cache is Bypassed
+
+The 15-second cache is bypassed in these scenarios:
+
+1. **Position older than 15 seconds** - Fresh data needed
+2. **State change detected** - On-chain state differs from database
+3. **Manual refresh requested** - User explicitly requests fresh data
+4. **First time accessing position** - No cached data exists
+
+#### Why 15 Seconds?
+
+The 15-second cache duration balances **freshness vs. cost**:
+
+**Freshness:**
+- Most users don't need sub-15-second position updates
+- On-chain state changes infrequently (liquidity add/remove, fee collection)
+- 15 seconds is fresh enough for dashboard displays
+
+**Cost:**
+- Avoids redundant RPC calls to Ethereum nodes
+- Reduces Etherscan API usage (rate limited)
+- Lowers database query load
+- Improves response time (cache hit = instant, RPC call = 200-500ms)
+
+**Alternative Durations Considered:**
+- 5 seconds: Too frequent, high RPC cost, minimal freshness benefit
+- 30 seconds: Too stale for active traders
+- 60 seconds: Too long, users expect near-real-time data
+
+#### Implementation
+
+The cache is implemented using Prisma's `updatedAt` field:
+
+```typescript
+model Position {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt  // Automatically updated by Prisma
+  // ... other fields
+}
+```
+
+Benefits:
+- ✅ No external cache infrastructure needed (Redis)
+- ✅ Automatic timestamp management by Prisma
+- ✅ Survives server restarts (persisted in database)
+- ✅ Works across multiple workers/processes
+- ✅ Simple to reason about
+
+#### Cache Invalidation
+
+The cache is **automatically invalidated** when:
+
+1. **`refresh()` detects state change** - Updates position, resets `updatedAt`
+2. **`discover()` creates position** - Sets initial `updatedAt`
+3. **`reset()` rebuilds position** - Updates `updatedAt` after rebuild
+4. **Manual update** - Any service that calls `position.update()` invalidates cache
+
+No manual cache invalidation needed!
+
+---
+
+### State Change Detection
+
+The UniswapV3 Position Service implements **on-chain state change detection** to determine when ledger events need to be re-synced.
+
+#### Monitored Fields
+
+The service monitors these on-chain fields to detect state changes:
+
+1. **`liquidity`** - Current liquidity in position
+2. **`tokensOwed0` / `tokensOwed1`** - Unclaimed fees/principal
+3. **`feeGrowthInside0LastX128` / `feeGrowthInside1LastX128`** - Fee growth checkpoints
+
+```typescript
+// Read current on-chain state
+const onChainState = await nfpmContract.read.positions([nftId]);
+
+// Compare with database state
+const stateChanged =
+  onChainState.liquidity !== position.state.liquidity ||
+  onChainState.tokensOwed0 !== position.state.tokensOwed0 ||
+  onChainState.tokensOwed1 !== position.state.tokensOwed1 ||
+  onChainState.feeGrowthInside0LastX128 !== position.state.feeGrowthInside0LastX128 ||
+  onChainState.feeGrowthInside1LastX128 !== position.state.feeGrowthInside1LastX128;
+```
+
+#### Why These Fields?
+
+These fields indicate that **a new event has occurred**:
+
+| Field | Indicates Event Type | Example |
+|-------|---------------------|---------|
+| `liquidity` changed | INCREASE_LIQUIDITY or DECREASE_LIQUIDITY | User added/removed liquidity |
+| `tokensOwed0/1` changed | DECREASE_LIQUIDITY or COLLECT | User removed liquidity (increases tokensOwed) or collected fees (decreases tokensOwed) |
+| `feeGrowthInside*` changed | COLLECT | User collected fees, fee growth checkpoints updated |
+
+#### How It Triggers Incremental Sync
+
+When a state change is detected:
+
+```typescript
+if (stateChanged) {
+  logger.info(
+    { positionId, onChainState, databaseState: position.state },
+    'State change detected, syncing ledger events'
+  );
+
+  // Trigger incremental sync (NOT full resync)
+  await syncLedgerEvents({
+    positionId: position.id,
+    chainId: position.config.chainId,
+    nftId: position.config.nftId,
+    forceFullResync: false, // Incremental sync
+  }, deps);
+}
+```
+
+**Incremental Sync Flow:**
+1. Get last finalized block
+2. Get last ledger event's block number
+3. Delete events >= last event block (clean state)
+4. Fetch new events from last event block → finalized block
+5. Process and save new events
+6. Refresh APR periods
+
+#### Benefits
+
+- ✅ **Automatic sync** - No manual intervention needed
+- ✅ **Efficient** - Only sync when state actually changed
+- ✅ **Incremental** - Don't refetch entire history
+- ✅ **Reliable** - Uses finalized blocks to avoid reorgs
+
+#### Edge Cases Handled
+
+1. **No state change** - Skip sync, return cached position
+2. **State change but no new finalized blocks** - Skip sync (no new events to fetch)
+3. **Multiple rapid state changes** - 15-second cache prevents redundant syncs
+4. **Blockchain reorg** - Finalized block boundary ensures no reorg issues
+
+---
+
+### Ledger Sync Flow Diagram
+
+This diagram shows the complete flow for `refresh()` method with incremental syncing:
+
+```
+User calls refresh(positionId)
+  │
+  ├─→ Check position.updatedAt
+  │     │
+  │     ├─→ < 15 seconds ago?
+  │     │     └─→ YES: Return cached position ✅
+  │     │
+  │     └─→ NO: Continue to state check
+  │
+  ├─→ Read on-chain state from NFPM contract
+  │     │
+  │     └─→ Compare with database state
+  │           │
+  │           ├─→ State unchanged?
+  │           │     │
+  │           │     └─→ YES: Recalculate common fields → Update position → Return ✅
+  │           │
+  │           └─→ NO: State changed → Continue to sync
+  │
+  ├─→ syncLedgerEvents() [INCREMENTAL]
+  │     │
+  │     ├─→ 1. Get last finalized block
+  │     │     │
+  │     │     └─→ evmBlockService.getLastFinalizedBlockNumber(chainId)
+  │     │
+  │     ├─→ 2. Determine fromBlock
+  │     │     │
+  │     │     ├─→ Get last ledger event block number
+  │     │     │
+  │     │     └─→ fromBlock = MIN(lastEventBlock ?? nfpmBlock, finalizedBlock)
+  │     │
+  │     ├─→ 3. Delete events >= fromBlock
+  │     │     │
+  │     │     └─→ deleteEventsFromBlock(positionId, fromBlock)
+  │     │
+  │     ├─→ 4. Fetch new events from Etherscan
+  │     │     │
+  │     │     └─→ etherscanClient.fetchPositionEvents(chainId, nftId, {
+  │     │           fromBlock, toBlock: finalizedBlock
+  │     │         })
+  │     │
+  │     ├─→ 5. Process and save events sequentially
+  │     │     │
+  │     │     └─→ processAndSaveEvents(positionId, rawEvents, deps)
+  │     │           │
+  │     │           ├─→ Fetch pool metadata (tokens, decimals)
+  │     │           │
+  │     │           ├─→ Get last event for state initialization
+  │     │           │
+  │     │           ├─→ Sort events chronologically
+  │     │           │
+  │     │           └─→ For each event:
+  │     │                 │
+  │     │                 ├─→ Get historic pool price at event block
+  │     │                 │
+  │     │                 ├─→ Calculate pool price value in quote token
+  │     │                 │
+  │     │                 ├─→ Build event input using processor helpers
+  │     │                 │     │
+  │     │                 │     ├─→ INCREASE_LIQUIDITY → increase-liquidity.ts
+  │     │                 │     ├─→ DECREASE_LIQUIDITY → decrease-liquidity.ts
+  │     │                 │     └─→ COLLECT → collect.ts
+  │     │                 │
+  │     │                 ├─→ Save event to database
+  │     │                 │
+  │     │                 └─→ Update state for next event
+  │     │
+  │     └─→ 6. Refresh APR periods
+  │           │
+  │           └─→ aprService.refresh(positionId)
+  │
+  ├─→ Recalculate common fields
+  │     │
+  │     ├─→ Get ledger summary (cost basis, PnL, collected fees)
+  │     ├─→ Calculate unclaimed fees (on-chain tick data)
+  │     ├─→ Calculate current position value
+  │     └─→ Calculate price range (tick bounds)
+  │
+  └─→ Update position in database → Return updated position ✅
+```
+
+**Key Decision Points:**
+
+1. **Cache Check** - Avoids redundant work if position recently updated
+2. **State Check** - Only sync if on-chain state changed
+3. **Incremental vs Full** - `refresh()` uses incremental, `discover()`/`reset()` use full
+4. **Finalized Block** - Never go beyond finalized block to avoid reorgs
+
+---
+
 ## Roadmap
 
 For the complete project roadmap across all packages, see:
