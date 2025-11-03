@@ -47,6 +47,27 @@ describe('syncLedgerEvents', () => {
     mockReset(ledgerServiceMock);
     mockReset(poolPriceServiceMock);
 
+    // Mock positionSyncState table operations
+    prismaMock.positionSyncState.findUnique.mockResolvedValue(null);
+    prismaMock.positionSyncState.create.mockResolvedValue({
+      id: 'sync_state_123',
+      positionId: 'pos_123',
+      state: { missingEvents: [] },
+      lastSyncAt: new Date(),
+      lastSyncBy: 'ledger-sync',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+    prismaMock.positionSyncState.update.mockResolvedValue({
+      id: 'sync_state_123',
+      positionId: 'pos_123',
+      state: { missingEvents: [] },
+      lastSyncAt: new Date(),
+      lastSyncBy: 'ledger-sync',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+
     deps = {
       prisma: prismaMock,
       etherscanClient: etherscanClientMock,

@@ -23,6 +23,13 @@ import {
 import { sortRawEventsByBlockchain } from './event-sorting.js';
 import { getHistoricPoolPrice } from './pool-price-fetcher.js';
 import { buildEventInput } from './event-builder.js';
+import {
+  convertMissingEventToRawEvent,
+  mergeEvents,
+  deduplicateEvents,
+  findConfirmedMissingEvents,
+} from './missing-events.js';
+import { UniswapV3PositionSyncState } from '../../position-sync-state.js';
 
 /**
  * Parameters for syncLedgerEvents function
@@ -73,13 +80,16 @@ export interface LedgerSyncDependencies {
 /**
  * Sync ledger events for a Uniswap V3 position
  *
- * Implements incremental event discovery with finalized block boundary:
+ * Implements incremental event discovery with finalized block boundary and missing events integration:
  * 1. Get last finalized block from chain
- * 2. Determine fromBlock (last event block OR NFPM deployment, whichever is earlier)
- * 3. Delete events >= fromBlock (ensures clean state for re-sync)
- * 4. Fetch new events from Etherscan (fromBlock → finalizedBlock)
- * 5. Process and save events sequentially
- * 6. Refresh APR periods
+ * 2. Load and prune sync state (remove missing events from finalized blocks)
+ * 3. Determine fromBlock (last event block OR NFPM deployment, whichever is earlier)
+ * 4. Delete events >= fromBlock (ensures clean state for re-sync)
+ * 5. Fetch new events from Etherscan (fromBlock → latest)
+ * 6. Merge missing events with Etherscan events and deduplicate
+ * 7. Process and save events sequentially
+ * 8. Clean up sync state (remove confirmed missing events)
+ * 9. Refresh APR periods
  *
  * @param params - Sync parameters
  * @param deps - Service dependencies
@@ -118,7 +128,20 @@ export async function syncLedgerEvents(
       'Retrieved last finalized block'
     );
 
-    // 2. Determine fromBlock
+    // 2. Load sync state and prune finalized missing events
+    const syncState = await UniswapV3PositionSyncState.load(prisma, positionId);
+
+    // Prune missing events from finalized blocks (dropped transactions)
+    syncState.pruneEvents(finalizedBlock);
+
+    const missingEventsDB = syncState.getMissingEventsSorted();
+
+    logger.debug(
+      { positionId, missingEventCount: missingEventsDB.length },
+      'Loaded and pruned sync state'
+    );
+
+    // 3. Determine fromBlock
     let fromBlock: bigint;
 
     if (forceFullResync) {
@@ -150,39 +173,67 @@ export async function syncLedgerEvents(
       );
     }
 
-    // 3. Delete events >= fromBlock (inclusive - ensures clean state)
+    // 4. Delete events >= fromBlock (inclusive - ensures clean state)
     const deletedCount = await deleteEventsFromBlock(positionId, fromBlock, prisma, logger);
     logger.info(
       { positionId, fromBlock: fromBlock.toString(), deletedCount },
       'Deleted events from block onwards'
     );
 
-    // 4. Fetch new events from Etherscan
+    // 5. Fetch new events from Etherscan
     logger.info(
       {
         positionId,
         chainId,
         nftId: nftId.toString(),
         fromBlock: fromBlock.toString(),
-        toBlock: 'latest',
+        toBlock: finalizedBlock.toString(),
       },
       'Fetching events from Etherscan'
     );
 
-    const rawEvents = await etherscanClient.fetchPositionEvents(chainId, nftId.toString(), {
+    const etherscanEvents = await etherscanClient.fetchPositionEvents(chainId, nftId.toString(), {
       fromBlock: fromBlock.toString(),
-      toBlock: 'latest',
+      toBlock: finalizedBlock.toString(),
     });
 
     logger.info(
-      { positionId, eventCount: rawEvents.length },
+      { positionId, etherscanEventCount: etherscanEvents.length },
       'Fetched raw events from Etherscan'
     );
 
-    if (rawEvents.length === 0) {
-      logger.info({ positionId }, 'No new events found');
+    // 6. Merge missing events with Etherscan events and deduplicate
+    const missingEventsRaw = missingEventsDB.map(event =>
+      convertMissingEventToRawEvent(event, chainId, nftId.toString())
+    );
+
+    logger.debug(
+      { positionId, missingEventCount: missingEventsRaw.length },
+      'Converted missing events to raw format'
+    );
+
+    const mergedEvents = mergeEvents(etherscanEvents, missingEventsRaw);
+    const deduplicatedEvents = deduplicateEvents(mergedEvents);
+
+    logger.info(
+      {
+        positionId,
+        etherscanCount: etherscanEvents.length,
+        missingCount: missingEventsRaw.length,
+        mergedCount: mergedEvents.length,
+        deduplicatedCount: deduplicatedEvents.length,
+      },
+      'Merged and deduplicated events'
+    );
+
+    if (deduplicatedEvents.length === 0) {
+      logger.info({ positionId }, 'No new events found after merge');
       // Still refresh APR in case events were deleted
       await aprService.refresh(positionId);
+
+      // Save sync state (may have pruned events)
+      await syncState.save(prisma, 'ledger-sync');
+
       return {
         eventsAdded: 0,
         finalizedBlock,
@@ -190,10 +241,10 @@ export async function syncLedgerEvents(
       };
     }
 
-    // 5. Process and save events sequentially
+    // 7. Process and save events sequentially
     const eventsAdded = await processAndSaveEvents(
       positionId,
-      rawEvents,
+      deduplicatedEvents,
       deps
     );
 
@@ -202,7 +253,36 @@ export async function syncLedgerEvents(
       'Processed and saved events'
     );
 
-    // 6. Refresh APR periods
+    // 8. Clean up sync state (remove confirmed missing events)
+    if (missingEventsDB.length > 0) {
+      // Get all ledger events to find which missing events are confirmed
+      const allLedgerEvents = await deps.ledgerService.findAllItems(positionId);
+
+      // Find confirmed transactions (txHash only - transactions are atomic)
+      const confirmedTxHashes = findConfirmedMissingEvents(missingEventsDB, allLedgerEvents);
+
+      // Remove ALL events from confirmed transactions
+      // Note: Transactions are atomic - if one event is confirmed, all are
+      let totalRemoved = 0;
+      for (const txHash of confirmedTxHashes) {
+        totalRemoved += syncState.removeMissingEventsByTxHash(txHash);
+      }
+
+      logger.info(
+        {
+          positionId,
+          missingEventsBefore: missingEventsDB.length,
+          confirmedCount: confirmedTxHashes.length,
+          missingEventsAfter: syncState.getMissingEventsSorted().length,
+        },
+        'Cleaned up sync state'
+      );
+    }
+
+    // Save sync state
+    await syncState.save(prisma, 'ledger-sync');
+
+    // 9. Refresh APR periods
     logger.info({ positionId }, 'Refreshing APR periods');
     await aprService.refresh(positionId);
 

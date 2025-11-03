@@ -200,6 +200,28 @@ export class UniswapV3PositionSyncState {
   }
 
   /**
+   * Remove all missing events for a transaction by transaction hash
+   *
+   * Since transactions are atomic on the blockchain, if one event from a
+   * transaction is confirmed, ALL events from that transaction are confirmed.
+   * This is the preferred method for cleanup after sync.
+   *
+   * Common case: DECREASE_LIQUIDITY + COLLECT in a single multicall transaction.
+   *
+   * @param transactionHash - Transaction hash
+   * @returns number of events removed
+   */
+  removeMissingEventsByTxHash(transactionHash: string): number {
+    const initialLength = this._state.missingEvents.length;
+
+    this._state.missingEvents = this._state.missingEvents.filter(
+      (event) => event.transactionHash !== transactionHash
+    );
+
+    return initialLength - this._state.missingEvents.length;
+  }
+
+  /**
    * Clear all missing events
    *
    * Useful after a full re-sync of the position.
