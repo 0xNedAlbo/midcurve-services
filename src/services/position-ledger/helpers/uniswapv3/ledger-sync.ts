@@ -27,7 +27,6 @@ import {
   convertMissingEventToRawEvent,
   mergeEvents,
   deduplicateEvents,
-  findConfirmedMissingEvents,
 } from './missing-events.js';
 import { UniswapV3PositionSyncState } from '../../position-sync-state.js';
 
@@ -128,17 +127,14 @@ export async function syncLedgerEvents(
       'Retrieved last finalized block'
     );
 
-    // 2. Load sync state and prune finalized missing events
+    // 2. Load sync state (do NOT prune yet - need to check Etherscan first)
     const syncState = await UniswapV3PositionSyncState.load(prisma, positionId);
-
-    // Prune missing events from finalized blocks (dropped transactions)
-    syncState.pruneEvents(finalizedBlock);
 
     const missingEventsDB = syncState.getMissingEventsSorted();
 
     logger.debug(
       { positionId, missingEventCount: missingEventsDB.length },
-      'Loaded and pruned sync state'
+      'Loaded sync state'
     );
 
     // 3. Determine fromBlock
@@ -180,21 +176,21 @@ export async function syncLedgerEvents(
       'Deleted events from block onwards'
     );
 
-    // 5. Fetch new events from Etherscan
+    // 5. Fetch new events from Etherscan (up to latest block)
     logger.info(
       {
         positionId,
         chainId,
         nftId: nftId.toString(),
         fromBlock: fromBlock.toString(),
-        toBlock: finalizedBlock.toString(),
+        toBlock: 'latest',
       },
       'Fetching events from Etherscan'
     );
 
     const etherscanEvents = await etherscanClient.fetchPositionEvents(chainId, nftId.toString(), {
       fromBlock: fromBlock.toString(),
-      toBlock: finalizedBlock.toString(),
+      toBlock: 'latest',
     });
 
     logger.info(
@@ -253,29 +249,61 @@ export async function syncLedgerEvents(
       'Processed and saved events'
     );
 
-    // 8. Clean up sync state (remove confirmed missing events)
+    // 8. Clean up sync state (remove missing events if found in Etherscan OR finalized but not found)
     if (missingEventsDB.length > 0) {
-      // Get all ledger events to find which missing events are confirmed
-      const allLedgerEvents = await deps.ledgerService.findAllItems(positionId);
-
-      // Find confirmed transactions (txHash only - transactions are atomic)
-      const confirmedTxHashes = findConfirmedMissingEvents(missingEventsDB, allLedgerEvents);
-
-      // Remove ALL events from confirmed transactions
-      // Note: Transactions are atomic - if one event is confirmed, all are
       let totalRemoved = 0;
-      for (const txHash of confirmedTxHashes) {
-        totalRemoved += syncState.removeMissingEventsByTxHash(txHash);
+
+      // Check each missing event against Etherscan results and finalization status
+      for (const missingEvent of missingEventsDB) {
+        const eventBlock = BigInt(missingEvent.blockNumber);
+        let shouldRemove = false;
+        let reason = '';
+
+        // Condition 1: Found in Etherscan (successfully indexed)
+        const foundInEtherscan = etherscanEvents.some((ethEvent) =>
+          ethEvent.transactionHash === missingEvent.transactionHash &&
+          ethEvent.logIndex === missingEvent.logIndex
+        );
+
+        if (foundInEtherscan) {
+          shouldRemove = true;
+          reason = 'found-in-etherscan';
+        }
+        // Condition 2: Block finalized but NOT in Etherscan (transaction dropped)
+        else if (eventBlock <= finalizedBlock) {
+          shouldRemove = true;
+          reason = 'finalized-but-not-found';
+        }
+
+        if (shouldRemove) {
+          if (syncState.removeMissingEvent(
+            missingEvent.transactionHash,
+            missingEvent.logIndex
+          )) {
+            totalRemoved++;
+            logger.debug(
+              {
+                positionId,
+                transactionHash: missingEvent.transactionHash,
+                blockNumber: missingEvent.blockNumber,
+                eventType: missingEvent.eventType,
+                reason,
+              },
+              'Removed missing event'
+            );
+          }
+        }
       }
 
       logger.info(
         {
           positionId,
           missingEventsBefore: missingEventsDB.length,
-          confirmedCount: confirmedTxHashes.length,
+          removedCount: totalRemoved,
           missingEventsAfter: syncState.getMissingEventsSorted().length,
+          finalizedBlock: finalizedBlock.toString(),
         },
-        'Cleaned up sync state'
+        'Cleaned up missing events'
       );
     }
 

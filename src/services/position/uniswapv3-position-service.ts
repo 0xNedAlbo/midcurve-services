@@ -16,7 +16,6 @@ import type {
     UniswapV3PositionDiscoverInput,
     CreatePositionInput,
 } from "../types/position/position-input.js";
-import type { CreateUniswapV3LedgerEventInput } from "../types/position-ledger/position-ledger-event-input.js";
 import { PositionService } from "./position-service.js";
 import { log } from "../../logging/index.js";
 import { EvmConfig } from "../../config/evm.js";
@@ -1058,16 +1057,28 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
             }
 
             // 2. Check if recently updated (< 15 seconds ago)
+            // BUT: Skip cache if position was just created (< 5 seconds old)
+            // to ensure missing events are processed immediately
             const now = new Date();
             const ageSeconds = (now.getTime() - existingPosition.updatedAt.getTime()) / 1000;
+            const positionAgeSeconds = (now.getTime() - existingPosition.createdAt.getTime()) / 1000;
+            const isNewlyCreated = positionAgeSeconds < 5;
 
-            if (ageSeconds < 15) {
+            if (!isNewlyCreated && ageSeconds < 15) {
+                // Use cache only if not newly created
                 this.logger.info(
                     { id, ageSeconds: ageSeconds.toFixed(2) },
                     "Position updated recently, returning cached data"
                 );
                 log.methodExit(this.logger, "refresh", { id, cached: true });
                 return existingPosition;
+            }
+
+            if (isNewlyCreated) {
+                this.logger.debug(
+                    { id, positionAgeSeconds: positionAgeSeconds.toFixed(2) },
+                    "Position newly created, bypassing cache to process missing events"
+                );
             }
 
             this.logger.debug(
@@ -1248,7 +1259,76 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         "Ledger events synced successfully after missing events detection"
                     );
 
-                    // Skip all other state checks - sync already handled everything
+                    // Re-fetch position after sync to get updated state
+                    // syncLedgerEvents() processes missing events and updates position state
+                    // We need fresh data before calculating values
+                    const syncedPosition = await this.findById(id);
+                    if (!syncedPosition) {
+                        throw new Error(
+                            `Position ${id} not found after syncing missing events`
+                        );
+                    }
+
+                    const pool = syncedPosition.pool;
+
+                    this.logger.debug(
+                        { id },
+                        "Position re-fetched after missing events sync - proceeding to value calculation"
+                    );
+
+                    // Skip state update (sync already handled it) - jump to value calculation
+                    // Get ledger summary for PnL calculations
+                    const ledgerSummary = await this.getLedgerSummary(id);
+
+                    // Calculate current position value
+                    const currentValue = this.calculateCurrentPositionValue(
+                        syncedPosition,
+                        pool
+                    );
+
+                    // Calculate unrealized PnL
+                    const unrealizedPnl = currentValue - ledgerSummary.costBasis;
+
+                    // Calculate unclaimed fees
+                    const unClaimedFees = await this.calculateUnclaimedFees(
+                        syncedPosition,
+                        pool
+                    );
+
+                    // Calculate price range
+                    const { priceRangeLower, priceRangeUpper } =
+                        this.calculatePriceRange(syncedPosition, pool);
+
+                    // Update position with calculated fields
+                    await this.updatePositionCommonFields(id, {
+                        currentValue,
+                        currentCostBasis: ledgerSummary.costBasis,
+                        realizedPnl: ledgerSummary.realizedPnl,
+                        unrealizedPnl,
+                        collectedFees: ledgerSummary.collectedFees,
+                        unClaimedFees,
+                        lastFeesCollectedAt:
+                            ledgerSummary.lastFeesCollectedAt.getTime() === 0
+                                ? syncedPosition.positionOpenedAt
+                                : ledgerSummary.lastFeesCollectedAt,
+                        priceRangeLower,
+                        priceRangeUpper,
+                    });
+
+                    this.logger.info(
+                        {
+                            id,
+                            currentValue: currentValue.toString(),
+                            costBasis: ledgerSummary.costBasis.toString(),
+                            unrealizedPnl: unrealizedPnl.toString(),
+                            unClaimedFees: unClaimedFees.toString(),
+                        },
+                        "Position values calculated and updated after missing events sync"
+                    );
+
+                    // Re-fetch final position with all updates
+                    const finalPosition = await this.findById(id);
+                    return finalPosition ?? syncedPosition;
                 } else {
                     this.logger.debug(
                         { id },
@@ -2144,249 +2224,74 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Token value calculated in quote units"
             );
 
-            // 13. Create INCREASE_POSITION ledger event
+            // 13. Create initial sync state with user-provided event as missing event
+            // This handles indexer lag - the event will be processed by refresh()
             this.logger.debug(
                 { positionId: createdPosition.id },
-                "Creating INCREASE_POSITION ledger event"
+                "Creating initial sync state with user-provided INCREASE event"
             );
 
-            const ledgerEventInput: CreateUniswapV3LedgerEventInput = {
-                positionId: createdPosition.id,
-                protocol: "uniswapv3",
-                previousId: null, // First event
-                timestamp: input.increaseEvent.timestamp,
-                eventType: "INCREASE_POSITION",
-                inputHash: "", // Will be generated by addItem
-                poolPrice: poolPriceValue,
-                token0Amount,
-                token1Amount,
-                tokenValue,
-                rewards: [], // No fees collected
-                deltaCostBasis: tokenValue, // Initial capital
-                costBasisAfter: tokenValue,
-                deltaPnl: 0n, // No PnL on open
-                pnlAfter: 0n,
-                config: {
-                    chainId,
-                    nftId: BigInt(nftId),
-                    blockNumber: input.increaseEvent.blockNumber,
-                    txIndex: input.increaseEvent.transactionIndex,
-                    logIndex: input.increaseEvent.logIndex,
-                    txHash: input.increaseEvent.transactionHash,
-                    deltaL: input.increaseEvent.liquidity, // Liquidity added
-                    liquidityAfter: input.increaseEvent.liquidity, // Total liquidity
-                    feesCollected0: 0n, // No fees on INCREASE
-                    feesCollected1: 0n,
-                    uncollectedPrincipal0After: 0n, // No principal yet
-                    uncollectedPrincipal1After: 0n,
-                    sqrtPriceX96, // Historic price
-                },
-                state: {
-                    eventType: "INCREASE_LIQUIDITY",
-                    tokenId: BigInt(nftId),
-                    liquidity: input.increaseEvent.liquidity,
-                    amount0: token0Amount,
-                    amount1: token1Amount,
-                },
-            };
-
-            await this.ledgerService.addItem(
-                createdPosition.id,
-                ledgerEventInput
+            const { UniswapV3PositionSyncState } = await import(
+                "../position-ledger/position-sync-state.js"
             );
 
-            this.logger.info(
-                {
-                    positionId: createdPosition.id,
-                    eventType: "INCREASE_POSITION",
-                    tokenValue: tokenValue.toString(),
-                },
-                "Ledger event created"
+            const syncState = await UniswapV3PositionSyncState.load(
+                this.prisma,
+                createdPosition.id
             );
 
-            // 13.5. Sync historical events from blockchain
-            // This discovers any COLLECT events that happened between position opening and import
-            // and updates the fee growth checkpoints to their correct values
-            this.logger.debug(
-                { positionId: createdPosition.id },
-                "Syncing historical events from blockchain to build complete ledger"
-            );
-
-            const { syncLedgerEvents } = await import(
-                "../position-ledger/helpers/uniswapv3/ledger-sync.js"
-            );
-
-            const syncResult = await syncLedgerEvents(
-                {
-                    positionId: createdPosition.id,
-                    chainId,
-                    nftId: BigInt(nftId),
-                    forceFullResync: true, // Full resync to catch all historical events
-                },
-                {
-                    prisma: this.prisma,
-                    etherscanClient: this.etherscanClient,
-                    evmBlockService: this.evmBlockService,
-                    aprService: this.aprService,
-                    logger: this.logger,
-                    ledgerService: this.ledgerService,
-                    poolPriceService: this.poolPriceService,
-                }
-            );
-
-            this.logger.info(
-                {
-                    positionId: createdPosition.id,
-                    eventsAdded: syncResult.eventsAdded,
-                    fromBlock: syncResult.fromBlock.toString(),
-                    finalizedBlock: syncResult.finalizedBlock.toString(),
-                },
-                "Historical events synced successfully during import"
-            );
-
-            // Update position state from the last ledger event
-            // The sync creates ledger events but doesn't update position state
-            // We need to apply the final state changes (liquidity, checkpoints) from the last event
-            if (syncResult.eventsAdded > 0) {
-                this.logger.debug(
-                    { positionId: createdPosition.id },
-                    "Updating position state from last ledger event after sync"
-                );
-
-                // Get the last ledger event to extract final state
-                const allEvents = await this.ledgerService.findAllItems(
-                    createdPosition.id
-                );
-                const lastEvent =
-                    allEvents.length > 0
-                        ? allEvents[allEvents.length - 1]
-                        : null;
-
-                if (lastEvent) {
-                    const lastEventConfig = lastEvent.config as {
-                        liquidityAfter?: string | bigint;
-                        feeGrowthInside0LastX128?: string | bigint;
-                        feeGrowthInside1LastX128?: string | bigint;
-                    };
-
-                    // Read current position state
-                    const currentPosition = await this.findById(
-                        createdPosition.id
-                    );
-                    if (!currentPosition) {
-                        throw new Error(
-                            `Position ${createdPosition.id} not found after sync`
-                        );
-                    }
-
-                    // Update liquidity from last event
-                    const finalLiquidity =
-                        typeof lastEventConfig.liquidityAfter === "string"
-                            ? BigInt(lastEventConfig.liquidityAfter)
-                            : lastEventConfig.liquidityAfter;
-
-                    if (finalLiquidity !== undefined) {
-                        currentPosition.state.liquidity = finalLiquidity;
-
-                        this.logger.debug(
-                            {
-                                positionId: createdPosition.id,
-                                newLiquidity: finalLiquidity.toString(),
-                            },
-                            "Updated position liquidity from last ledger event"
-                        );
-                    }
-
-                    // Update position state in database
-                    const stateDB = this.serializeState(currentPosition.state);
-
-                    await this.prisma.position.update({
-                        where: { id: createdPosition.id },
-                        data: {
-                            state: stateDB as object,
-                        },
-                    });
-
-                    this.logger.info(
-                        { positionId: createdPosition.id },
-                        "Position state updated after historical sync"
-                    );
-                }
-            }
-
-            // Re-fetch position with updated state after sync
-            const updatedPosition = await this.findById(createdPosition.id);
-            if (!updatedPosition) {
-                throw new Error(
-                    `Position ${createdPosition.id} not found after sync`
-                );
-            }
-
-            // 14. Calculate and update position common fields
-            this.logger.debug(
-                { positionId: updatedPosition.id },
-                "Calculating position common fields"
-            );
-
-            // Get ledger summary (cost basis, PnL, fees)
-            const ledgerSummary = await this.getLedgerSummary(
-                updatedPosition.id
-            );
-
-            // Calculate current position value (using current pool price, not historic)
-            const currentValue = this.calculateCurrentPositionValue(
-                updatedPosition,
-                pool
-            );
-
-            // Calculate unrealized PnL
-            const unrealizedPnl = currentValue - ledgerSummary.costBasis;
-
-            // Calculate unclaimed fees
-            const unClaimedFees = await this.calculateUnclaimedFees(
-                updatedPosition,
-                pool
-            );
-
-            // Calculate price range
-            const { priceRangeLower, priceRangeUpper } =
-                this.calculatePriceRange(updatedPosition, pool);
-
-            // Update position with calculated fields
-            await this.updatePositionCommonFields(updatedPosition.id, {
-                currentValue,
-                currentCostBasis: ledgerSummary.costBasis,
-                realizedPnl: ledgerSummary.realizedPnl,
-                unrealizedPnl,
-                collectedFees: ledgerSummary.collectedFees,
-                unClaimedFees,
-                lastFeesCollectedAt:
-                    ledgerSummary.lastFeesCollectedAt.getTime() === 0
-                        ? updatedPosition.positionOpenedAt
-                        : ledgerSummary.lastFeesCollectedAt,
-                priceRangeLower,
-                priceRangeUpper,
+            syncState.addMissingEvent({
+                eventType: "INCREASE_LIQUIDITY",
+                timestamp: input.increaseEvent.timestamp.toISOString(),
+                blockNumber: input.increaseEvent.blockNumber.toString(),
+                transactionIndex: input.increaseEvent.transactionIndex,
+                logIndex: input.increaseEvent.logIndex,
+                transactionHash: input.increaseEvent.transactionHash,
+                liquidity: input.increaseEvent.liquidity.toString(),
+                amount0: input.increaseEvent.amount0.toString(),
+                amount1: input.increaseEvent.amount1.toString(),
             });
 
+            await syncState.save(this.prisma, "position-create");
+
             this.logger.info(
                 {
-                    positionId: updatedPosition.id,
-                    currentValue: currentValue.toString(),
-                    costBasis: ledgerSummary.costBasis.toString(),
-                    unrealizedPnl: unrealizedPnl.toString(),
-                    unClaimedFees: unClaimedFees.toString(),
+                    positionId: createdPosition.id,
+                    eventType: "INCREASE_LIQUIDITY",
+                    transactionHash: input.increaseEvent.transactionHash,
                 },
-                "Position common fields calculated and updated"
+                "Initial INCREASE_LIQUIDITY event stored as missing event"
+            );
+
+            // 14. Call refresh() to process missing event and sync from blockchain
+            // refresh() will:
+            // - Process the missing INCREASE_LIQUIDITY event → create INCREASE_POSITION ledger event
+            // - Sync any additional events from blockchain (COLLECT, DECREASE)
+            // - Calculate position value, cost basis, PnL, fees
+            // - Update all position fields
+            this.logger.debug(
+                { positionId: createdPosition.id },
+                "Calling refresh() to process missing event and sync blockchain events"
+            );
+
+            const refreshedPosition = await this.refresh(createdPosition.id);
+
+            this.logger.info(
+                {
+                    positionId: refreshedPosition.id,
+                    currentValue: refreshedPosition.currentValue.toString(),
+                    costBasis: refreshedPosition.currentCostBasis.toString(),
+                    unrealizedPnl: refreshedPosition.unrealizedPnl.toString(),
+                },
+                "Position created and refreshed successfully"
             );
 
             log.methodExit(this.logger, "createPositionFromUserData", {
-                id: updatedPosition.id,
+                id: refreshedPosition.id,
                 duplicate: false,
             });
 
-            // Re-fetch position with updated fields
-            const finalPosition = await this.findById(updatedPosition.id);
-            return finalPosition ?? updatedPosition;
+            return refreshedPosition;
         } catch (error) {
             // Only log if not already logged
             if (
