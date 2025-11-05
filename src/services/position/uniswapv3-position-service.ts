@@ -1276,6 +1276,102 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         "Position re-fetched after missing events sync - proceeding to value calculation"
                     );
 
+                    // ========================================================================
+                    // SYNC POSITION STATE WITH LEDGER
+                    // ========================================================================
+                    // After syncLedgerEvents() completes, ledger tracks correct liquidity
+                    // in event configs, but position.state.liquidity may be stale.
+                    // We need to:
+                    // 1. Get last ledger event's liquidityAfter
+                    // 2. Update position.state.liquidity to match ledger
+                    // 3. Check if position is fully closed
+                    // ========================================================================
+
+                    this.logger.debug(
+                        { id },
+                        "Syncing position.state with ledger after event processing"
+                    );
+
+                    // Get last ledger event to extract calculated liquidity
+                    const lastEvents = await this.ledgerService.findAllItems(id);
+                    const lastLedgerEvent = lastEvents[0]; // Sorted DESC by timestamp
+
+                    if (lastLedgerEvent) {
+                        const ledgerLiquidity = lastLedgerEvent.config.liquidityAfter ?? 0n;
+                        const currentStateLiquidity = syncedPosition.state.liquidity;
+
+                        // Check if we need to update position.state.liquidity
+                        if (ledgerLiquidity !== currentStateLiquidity) {
+                            this.logger.info(
+                                {
+                                    id,
+                                    oldLiquidity: currentStateLiquidity.toString(),
+                                    newLiquidity: ledgerLiquidity.toString(),
+                                },
+                                "Updating position.state.liquidity to match ledger"
+                            );
+
+                            // Update position state with new liquidity
+                            const updatedState: UniswapV3PositionState = {
+                                ...syncedPosition.state,
+                                liquidity: ledgerLiquidity,
+                            };
+
+                            // Serialize state for database (converts bigints to strings)
+                            const stateDB = this.serializeState(updatedState);
+
+                            // Update position state in database
+                            await this.prisma.position.update({
+                                where: { id },
+                                data: {
+                                    state: stateDB as object,
+                                },
+                            });
+
+                            // Update in-memory object
+                            syncedPosition.state.liquidity = ledgerLiquidity;
+                        }
+
+                        // ========================================================================
+                        // POSITION CLOSURE DETECTION
+                        // ========================================================================
+                        // A position is fully closed when:
+                        // 1. Liquidity is zero (all liquidity withdrawn)
+                        // 2. Last event is COLLECT (all principal collected)
+                        // 3. Position is currently marked as active
+                        // ========================================================================
+
+                        const isLiquidityZero = ledgerLiquidity === 0n;
+                        const isLastEventCollect = lastLedgerEvent.eventType === 'COLLECT';
+                        const isCurrentlyActive = syncedPosition.isActive;
+
+                        if (isLiquidityZero && isLastEventCollect && isCurrentlyActive) {
+                            const closedAt = lastLedgerEvent.timestamp;
+
+                            this.logger.info(
+                                {
+                                    id,
+                                    closedAt: closedAt.toISOString(),
+                                    lastEventType: lastLedgerEvent.eventType,
+                                },
+                                "Position fully closed - setting isActive=false and positionClosedAt"
+                            );
+
+                            // Mark position as closed
+                            await this.prisma.position.update({
+                                where: { id },
+                                data: {
+                                    isActive: false,
+                                    positionClosedAt: closedAt,
+                                },
+                            });
+
+                            // Update in-memory object
+                            syncedPosition.isActive = false;
+                            syncedPosition.positionClosedAt = closedAt;
+                        }
+                    }
+
                     // Skip state update (sync already handled it) - jump to value calculation
                     // Get ledger summary for PnL calculations
                     const ledgerSummary = await this.getLedgerSummary(id);
@@ -1466,6 +1562,65 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     } // End of liquidity consistency check else block
                 } // End of missing events check else block
 
+            // ========================================================================
+            // SYNC POSITION STATE WITH LEDGER (PATH 2)
+            // ========================================================================
+            // After any syncLedgerEvents() calls above, we need to sync position.state
+            // with the ledger's calculated liquidity and check for position closure.
+            // This ensures the state saved to the database reflects the ledger.
+            // ========================================================================
+
+            this.logger.debug(
+                { id },
+                "Syncing position.state with ledger before saving (Path 2)"
+            );
+
+            // Get last ledger event to extract calculated liquidity
+            const lastEventsBeforeSave = await this.ledgerService.findAllItems(id);
+            const lastLedgerEventBeforeSave = lastEventsBeforeSave[0]; // Sorted DESC by timestamp
+
+            // Track closure info separately
+            let positionClosureInfo: { shouldClose: boolean; closedAt: Date } | null = null;
+
+            if (lastLedgerEventBeforeSave) {
+                const ledgerLiquidityBeforeSave = lastLedgerEventBeforeSave.config.liquidityAfter ?? 0n;
+
+                // Update updatedState with ledger's liquidity (so it gets saved correctly)
+                if (ledgerLiquidityBeforeSave !== updatedState.liquidity) {
+                    this.logger.info(
+                        {
+                            id,
+                            oldLiquidity: updatedState.liquidity.toString(),
+                            newLiquidity: ledgerLiquidityBeforeSave.toString(),
+                        },
+                        "Updating updatedState.liquidity to match ledger before save"
+                    );
+
+                    updatedState.liquidity = ledgerLiquidityBeforeSave;
+                }
+
+                // Check for position closure
+                const isLiquidityZero = ledgerLiquidityBeforeSave === 0n;
+                const isLastEventCollect = lastLedgerEventBeforeSave.eventType === 'COLLECT';
+                const isCurrentlyActive = existingPosition.isActive;
+
+                if (isLiquidityZero && isLastEventCollect && isCurrentlyActive) {
+                    const closedAt = lastLedgerEventBeforeSave.timestamp;
+
+                    this.logger.info(
+                        {
+                            id,
+                            closedAt: closedAt.toISOString(),
+                            lastEventType: lastLedgerEventBeforeSave.eventType,
+                        },
+                        "Position fully closed - will mark as closed after state update"
+                    );
+
+                    // Store closure info to apply after state update
+                    positionClosureInfo = { shouldClose: true, closedAt };
+                }
+            }
+
             // 5. Update database with new state
             const stateDB = this.serializeState(updatedState);
 
@@ -1503,6 +1658,29 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 },
                 "Position state refreshed successfully"
             );
+
+            // 6a. Apply position closure if detected
+            if (positionClosureInfo?.shouldClose) {
+                this.logger.info(
+                    {
+                        id,
+                        closedAt: positionClosureInfo.closedAt.toISOString(),
+                    },
+                    "Marking position as closed"
+                );
+
+                await this.prisma.position.update({
+                    where: { id },
+                    data: {
+                        isActive: false,
+                        positionClosedAt: positionClosureInfo.closedAt,
+                    },
+                });
+
+                // Update in-memory object
+                refreshedPosition.isActive = false;
+                refreshedPosition.positionClosedAt = positionClosureInfo.closedAt;
+            }
 
             // 7. Recalculate and update common fields
             this.logger.debug(
