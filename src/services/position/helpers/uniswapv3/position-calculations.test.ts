@@ -12,6 +12,7 @@ import { pino } from 'pino';
 import {
   getLedgerSummary,
   calculateUnclaimedFees,
+  getUncollectedPrincipalFromLedger,
   calculateCurrentPositionValue,
   getCurrentLiquidityFromLedger,
   type LedgerSummary,
@@ -186,16 +187,79 @@ describe('getLedgerSummary', () => {
   });
 });
 
+describe('getUncollectedPrincipalFromLedger', () => {
+  let ledgerServiceMock: DeepMockProxy<UniswapV3PositionLedgerService>;
+  const logger = pino({ level: 'silent' });
+
+  beforeEach(() => {
+    ledgerServiceMock = mockDeep<UniswapV3PositionLedgerService>();
+    mockReset(ledgerServiceMock);
+  });
+
+  it('should return zero when no ledger events exist', async () => {
+    ledgerServiceMock.findAllItems.mockResolvedValue([]);
+
+    const result = await getUncollectedPrincipalFromLedger('pos_123', ledgerServiceMock, logger);
+
+    expect(result.uncollectedPrincipal0).toBe(0n);
+    expect(result.uncollectedPrincipal1).toBe(0n);
+  });
+
+  it('should extract uncollected principal from latest event config', async () => {
+    const mockEvents = [
+      {
+        id: 'evt_2',
+        positionId: 'pos_123',
+        eventType: 'DECREASE_LIQUIDITY',
+        timestamp: new Date('2024-01-02'),
+        config: {
+          uncollectedPrincipal0After: 500000000000000000n, // 0.5 ETH
+          uncollectedPrincipal1After: 1000000000n, // 1000 USDC
+        },
+      },
+      {
+        id: 'evt_1',
+        positionId: 'pos_123',
+        eventType: 'INCREASE_LIQUIDITY',
+        timestamp: new Date('2024-01-01'),
+        config: {
+          uncollectedPrincipal0After: 0n,
+          uncollectedPrincipal1After: 0n,
+        },
+      },
+    ];
+
+    ledgerServiceMock.findAllItems.mockResolvedValue(mockEvents as any);
+
+    const result = await getUncollectedPrincipalFromLedger('pos_123', ledgerServiceMock, logger);
+
+    expect(result.uncollectedPrincipal0).toBe(500000000000000000n);
+    expect(result.uncollectedPrincipal1).toBe(1000000000n);
+  });
+
+  it('should handle errors gracefully and return zero', async () => {
+    ledgerServiceMock.findAllItems.mockRejectedValue(new Error('Database error'));
+
+    const result = await getUncollectedPrincipalFromLedger('pos_123', ledgerServiceMock, logger);
+
+    expect(result.uncollectedPrincipal0).toBe(0n);
+    expect(result.uncollectedPrincipal1).toBe(0n);
+  });
+});
+
 describe('calculateUnclaimedFees', () => {
   let evmConfigMock: DeepMockProxy<EvmConfig>;
+  let ledgerServiceMock: DeepMockProxy<UniswapV3PositionLedgerService>;
   const logger = pino({ level: 'silent' });
 
   beforeEach(() => {
     evmConfigMock = mockDeep<EvmConfig>();
+    ledgerServiceMock = mockDeep<UniswapV3PositionLedgerService>();
     mockReset(evmConfigMock);
+    mockReset(ledgerServiceMock);
   });
 
-  it('should return 0 when position has no liquidity', async () => {
+  it('should return zero values when position has no liquidity', async () => {
     const position: Partial<UniswapV3Position> = {
       id: 'pos_123',
       config: {
@@ -208,6 +272,8 @@ describe('calculateUnclaimedFees', () => {
         liquidity: 0n, // No liquidity
         feeGrowthInside0LastX128: 0n,
         feeGrowthInside1LastX128: 0n,
+        tokensOwed0: 0n,
+        tokensOwed1: 0n,
       },
       isToken0Quote: true,
     };
@@ -222,14 +288,17 @@ describe('calculateUnclaimedFees', () => {
       position as UniswapV3Position,
       pool as UniswapV3Pool,
       evmConfigMock,
+      ledgerServiceMock,
       logger
     );
 
-    expect(result).toBe(0n);
+    expect(result.unclaimedFeesValue).toBe(0n);
+    expect(result.unclaimedFees0).toBe(0n);
+    expect(result.unclaimedFees1).toBe(0n);
     expect(evmConfigMock.getPublicClient).not.toHaveBeenCalled();
   });
 
-  it('should calculate fees for in-range position', async () => {
+  it('should calculate only incremental fees when no tokensOwed or uncollected principal', async () => {
     const mockClient = {
       readContract: vi.fn(),
     };
@@ -252,6 +321,7 @@ describe('calculateUnclaimedFees', () => {
       ]); // tickDataUpper
 
     evmConfigMock.getPublicClient.mockReturnValue(mockClient as any);
+    ledgerServiceMock.findAllItems.mockResolvedValue([]); // No ledger events
 
     const position: Partial<UniswapV3Position> = {
       id: 'pos_123',
@@ -265,6 +335,8 @@ describe('calculateUnclaimedFees', () => {
         liquidity: 1000000000000000000n,
         feeGrowthInside0LastX128: 100000n,
         feeGrowthInside1LastX128: 200000n,
+        tokensOwed0: 0n, // No checkpointed fees
+        tokensOwed1: 0n,
       },
       isToken0Quote: true,
     };
@@ -282,21 +354,111 @@ describe('calculateUnclaimedFees', () => {
       position as UniswapV3Position,
       pool as UniswapV3Pool,
       evmConfigMock,
+      ledgerServiceMock,
       logger
     );
 
-    // Result should be > 0 (exact value depends on fee growth calculations)
-    expect(result).toBeGreaterThanOrEqual(0n);
+    // Result should be >= 0 (only incremental fees)
+    expect(result.unclaimedFeesValue).toBeGreaterThanOrEqual(0n);
+    expect(result.unclaimedFees0).toBeGreaterThanOrEqual(0n);
+    expect(result.unclaimedFees1).toBeGreaterThanOrEqual(0n);
     expect(evmConfigMock.getPublicClient).toHaveBeenCalledWith(1);
     expect(mockClient.readContract).toHaveBeenCalledTimes(4);
   });
 
-  it('should handle RPC call failure gracefully', async () => {
+  it('should separate pure fees from tokensOwed by subtracting uncollected principal', async () => {
     const mockClient = {
-      readContract: vi.fn().mockRejectedValue(new Error('RPC error')),
+      readContract: vi.fn(),
     };
 
+    // Mock RPC responses (minimal fee growth for simplicity)
+    mockClient.readContract
+      .mockResolvedValueOnce(1000n) // feeGrowthGlobal0X128
+      .mockResolvedValueOnce(2000n) // feeGrowthGlobal1X128
+      .mockResolvedValueOnce([0n, 0n, 500n, 1000n, 0n, 0n, 0, false]) // tickDataLower
+      .mockResolvedValueOnce([0n, 0n, 600n, 1200n, 0n, 0n, 0, false]); // tickDataUpper
+
     evmConfigMock.getPublicClient.mockReturnValue(mockClient as any);
+
+    // Mock ledger with uncollected principal
+    const mockEvents = [
+      {
+        id: 'evt_1',
+        config: {
+          uncollectedPrincipal0After: 500000000000000000n, // 0.5 ETH principal
+          uncollectedPrincipal1After: 1000000000n, // 1000 USDC principal
+        },
+      },
+    ];
+    ledgerServiceMock.findAllItems.mockResolvedValue(mockEvents as any);
+
+    const position: Partial<UniswapV3Position> = {
+      id: 'pos_123',
+      config: {
+        chainId: 1,
+        poolAddress: '0xPool',
+        tickLower: -100,
+        tickUpper: 100,
+      },
+      state: {
+        liquidity: 1000000000000000000n,
+        feeGrowthInside0LastX128: 100n,
+        feeGrowthInside1LastX128: 200n,
+        tokensOwed0: 500100000000000000n, // 0.5001 ETH (0.5 principal + 0.0001 fees)
+        tokensOwed1: 1000050000n, // 1000.05 USDC (1000 principal + 0.05 fees)
+      },
+      isToken0Quote: true,
+    };
+
+    const pool: Partial<UniswapV3Pool> = {
+      state: {
+        currentTick: 0,
+        sqrtPriceX96: 79228162514264337593543950336n, // 1:1 price
+      },
+      token0: { decimals: 18 },
+      token1: { decimals: 6 },
+    };
+
+    const result = await calculateUnclaimedFees(
+      position as UniswapV3Position,
+      pool as UniswapV3Pool,
+      evmConfigMock,
+      ledgerServiceMock,
+      logger
+    );
+
+    // Checkpointed fees0 = tokensOwed0 - uncollectedPrincipal0 = 0.0001 ETH
+    // Checkpointed fees1 = tokensOwed1 - uncollectedPrincipal1 = 0.05 USDC
+    // Total fees = checkpointed + incremental (incremental is very small in this test)
+    expect(result.unclaimedFees0).toBeGreaterThanOrEqual(100000000000000n); // At least checkpointed fees
+    expect(result.unclaimedFees1).toBeGreaterThanOrEqual(50000n); // At least checkpointed fees
+  });
+
+  it('should handle edge case where tokensOwed equals uncollected principal (no fees)', async () => {
+    const mockClient = {
+      readContract: vi.fn(),
+    };
+
+    // Mock RPC responses (zero fee growth)
+    mockClient.readContract
+      .mockResolvedValueOnce(0n) // feeGrowthGlobal0X128
+      .mockResolvedValueOnce(0n) // feeGrowthGlobal1X128
+      .mockResolvedValueOnce([0n, 0n, 0n, 0n, 0n, 0n, 0, false]) // tickDataLower
+      .mockResolvedValueOnce([0n, 0n, 0n, 0n, 0n, 0n, 0, false]); // tickDataUpper
+
+    evmConfigMock.getPublicClient.mockReturnValue(mockClient as any);
+
+    // Mock ledger with uncollected principal exactly equal to tokensOwed
+    const mockEvents = [
+      {
+        id: 'evt_1',
+        config: {
+          uncollectedPrincipal0After: 500000000000000000n,
+          uncollectedPrincipal1After: 1000000000n,
+        },
+      },
+    ];
+    ledgerServiceMock.findAllItems.mockResolvedValue(mockEvents as any);
 
     const position: Partial<UniswapV3Position> = {
       id: 'pos_123',
@@ -310,6 +472,57 @@ describe('calculateUnclaimedFees', () => {
         liquidity: 1000000000000000000n,
         feeGrowthInside0LastX128: 0n,
         feeGrowthInside1LastX128: 0n,
+        tokensOwed0: 500000000000000000n, // Exactly equals uncollected principal
+        tokensOwed1: 1000000000n, // Exactly equals uncollected principal
+      },
+      isToken0Quote: true,
+    };
+
+    const pool: Partial<UniswapV3Pool> = {
+      state: {
+        currentTick: 0,
+        sqrtPriceX96: 79228162514264337593543950336n,
+      },
+      token0: { decimals: 18 },
+      token1: { decimals: 6 },
+    };
+
+    const result = await calculateUnclaimedFees(
+      position as UniswapV3Position,
+      pool as UniswapV3Pool,
+      evmConfigMock,
+      ledgerServiceMock,
+      logger
+    );
+
+    // All tokensOwed is principal, no fees checkpointed, no incremental fees
+    expect(result.unclaimedFees0).toBe(0n);
+    expect(result.unclaimedFees1).toBe(0n);
+    expect(result.unclaimedFeesValue).toBe(0n);
+  });
+
+  it('should handle RPC call failure gracefully', async () => {
+    const mockClient = {
+      readContract: vi.fn().mockRejectedValue(new Error('RPC error')),
+    };
+
+    evmConfigMock.getPublicClient.mockReturnValue(mockClient as any);
+    ledgerServiceMock.findAllItems.mockResolvedValue([]);
+
+    const position: Partial<UniswapV3Position> = {
+      id: 'pos_123',
+      config: {
+        chainId: 1,
+        poolAddress: '0xPool',
+        tickLower: -100,
+        tickUpper: 100,
+      },
+      state: {
+        liquidity: 1000000000000000000n,
+        feeGrowthInside0LastX128: 0n,
+        feeGrowthInside1LastX128: 0n,
+        tokensOwed0: 0n,
+        tokensOwed1: 0n,
       },
       isToken0Quote: true,
     };
@@ -324,10 +537,14 @@ describe('calculateUnclaimedFees', () => {
       position as UniswapV3Position,
       pool as UniswapV3Pool,
       evmConfigMock,
+      ledgerServiceMock,
       logger
     );
 
-    expect(result).toBe(0n); // Should return 0 on error
+    // Should return zero values on error
+    expect(result.unclaimedFeesValue).toBe(0n);
+    expect(result.unclaimedFees0).toBe(0n);
+    expect(result.unclaimedFees1).toBe(0n);
   });
 });
 

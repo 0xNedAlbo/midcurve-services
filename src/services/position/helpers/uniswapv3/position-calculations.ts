@@ -107,6 +107,72 @@ export async function getLedgerSummary(
 }
 
 /**
+ * Uncollected principal amounts from ledger
+ */
+export interface UncollectedPrincipal {
+  /** Uncollected principal in token0 (from DECREASE events, not yet COLLECTed) */
+  uncollectedPrincipal0: bigint;
+  /** Uncollected principal in token1 (from DECREASE events, not yet COLLECTed) */
+  uncollectedPrincipal1: bigint;
+}
+
+/**
+ * Get uncollected principal from the latest ledger event
+ *
+ * When a position's liquidity is decreased, the withdrawn token amounts are added to
+ * `tokensOwed*` in the NFPM contract but remain uncollected until `collect()` is called.
+ * The ledger tracks these amounts as `uncollectedPrincipal0/1After` in event configs.
+ *
+ * This function reads the latest ledger event to get the current uncollected principal amounts.
+ * These amounts are subtracted from `tokensOwed*` to calculate pure fees (not mixed with principal).
+ *
+ * @param positionId - Position database ID
+ * @param ledgerService - Ledger service instance for fetching events
+ * @param logger - Logger instance for warnings
+ * @returns Uncollected principal amounts in token0 and token1
+ */
+export async function getUncollectedPrincipalFromLedger(
+  positionId: string,
+  ledgerService: UniswapV3PositionLedgerService,
+  logger: Logger
+): Promise<UncollectedPrincipal> {
+  try {
+    const events = await ledgerService.findAllItems(positionId);
+
+    if (events.length === 0) {
+      // No events yet - no uncollected principal
+      return {
+        uncollectedPrincipal0: 0n,
+        uncollectedPrincipal1: 0n,
+      };
+    }
+
+    // Latest event is first (descending order by timestamp)
+    const latestEvent = events[0]!;
+
+    // Extract uncollected principal from event config
+    const config = latestEvent.config as {
+      uncollectedPrincipal0After: bigint;
+      uncollectedPrincipal1After: bigint;
+    };
+
+    return {
+      uncollectedPrincipal0: config.uncollectedPrincipal0After,
+      uncollectedPrincipal1: config.uncollectedPrincipal1After,
+    };
+  } catch (error) {
+    logger.warn(
+      { error, positionId },
+      "Failed to get uncollected principal from ledger, using 0"
+    );
+    return {
+      uncollectedPrincipal0: 0n,
+      uncollectedPrincipal1: 0n,
+    };
+  }
+}
+
+/**
  * Result of unclaimed fees calculation
  */
 export interface UnclaimedFeesResult {
@@ -121,11 +187,23 @@ export interface UnclaimedFeesResult {
 /**
  * Calculate unclaimed fees for a position
  *
- * Reads tick data from pool contract and calculates fee growth inside the position range.
+ * Implements the complete fee calculation algorithm:
+ * 1. Calculate incremental fees (fees earned since last checkpoint via feeGrowthInside)
+ * 2. Read tokensOwed* from position state (checkpointed fees + uncollected principal)
+ * 3. Get uncollected principal from ledger events (withdrawn liquidity not yet collected)
+ * 4. Separate pure fees from tokensOwed by subtracting uncollected principal
+ * 5. Return total claimable fees = incremental + checkpointed (pure fees only)
  *
- * @param position - Position object with config and state
+ * Why this is necessary:
+ * - `tokensOwed*` in NFPM contract contains BOTH fees AND withdrawn principal
+ * - When liquidity is decreased, token amounts are added to `tokensOwed*`
+ * - Those amounts remain in `tokensOwed*` until `collect()` is called
+ * - We must separate pure fees from principal to show accurate unclaimed fees
+ *
+ * @param position - Position object with config and state (includes tokensOwed*)
  * @param pool - Pool object with current state
  * @param evmConfig - EVM config for RPC access
+ * @param ledgerService - Ledger service for reading uncollected principal
  * @param logger - Logger instance for warnings
  * @returns Object containing quote-denominated total and individual token amounts
  */
@@ -133,6 +211,7 @@ export async function calculateUnclaimedFees(
   position: UniswapV3Position,
   pool: UniswapV3Pool,
   evmConfig: EvmConfig,
+  ledgerService: UniswapV3PositionLedgerService,
   logger: Logger
 ): Promise<UnclaimedFeesResult> {
   try {
@@ -227,7 +306,7 @@ export async function calculateUnclaimedFees(
       feeGrowthOutsideUpper1X128
     );
 
-    // Calculate incremental fees (fees earned since last checkpoint)
+    // STEP 1: Calculate incremental fees (fees earned since last checkpoint)
     const incremental0 = calculateIncrementalFees(
       feeGrowthInside.inside0,
       feeGrowthInside0LastX128,
@@ -239,21 +318,66 @@ export async function calculateUnclaimedFees(
       liquidity
     );
 
+    // STEP 2: Get tokensOwed from position state (checkpointed fees + uncollected principal)
+    const tokensOwed0 = position.state.tokensOwed0;
+    const tokensOwed1 = position.state.tokensOwed1;
+
+    // STEP 3: Get uncollected principal from latest ledger event
+    const uncollectedPrincipal = await getUncollectedPrincipalFromLedger(
+      position.id,
+      ledgerService,
+      logger
+    );
+
+    // STEP 4: Separate pure checkpointed fees from tokensOwed by subtracting principal
+    // If tokensOwed < uncollectedPrincipal, all of tokensOwed is principal (no fees checkpointed)
+    const pureCheckpointedFees0 =
+      tokensOwed0 > uncollectedPrincipal.uncollectedPrincipal0
+        ? tokensOwed0 - uncollectedPrincipal.uncollectedPrincipal0
+        : 0n;
+
+    const pureCheckpointedFees1 =
+      tokensOwed1 > uncollectedPrincipal.uncollectedPrincipal1
+        ? tokensOwed1 - uncollectedPrincipal.uncollectedPrincipal1
+        : 0n;
+
+    // STEP 5: Total claimable fees = checkpointed + incremental
+    const totalClaimable0 = pureCheckpointedFees0 + incremental0;
+    const totalClaimable1 = pureCheckpointedFees1 + incremental1;
+
     // Convert to quote token value using the correct utility function
     // This handles precision properly by scaling before dividing
     const unclaimedFeesValue = calculateTokenValueInQuote(
-      incremental0,
-      incremental1,
+      totalClaimable0,
+      totalClaimable1,
       pool.state.sqrtPriceX96,
       position.isToken0Quote,
       pool.token0.decimals,
       pool.token1.decimals
     );
 
+    logger.debug(
+      {
+        positionId: position.id,
+        incremental0: incremental0.toString(),
+        incremental1: incremental1.toString(),
+        tokensOwed0: tokensOwed0.toString(),
+        tokensOwed1: tokensOwed1.toString(),
+        uncollectedPrincipal0: uncollectedPrincipal.uncollectedPrincipal0.toString(),
+        uncollectedPrincipal1: uncollectedPrincipal.uncollectedPrincipal1.toString(),
+        pureCheckpointedFees0: pureCheckpointedFees0.toString(),
+        pureCheckpointedFees1: pureCheckpointedFees1.toString(),
+        totalClaimable0: totalClaimable0.toString(),
+        totalClaimable1: totalClaimable1.toString(),
+        unclaimedFeesValue: unclaimedFeesValue.toString(),
+      },
+      "Unclaimed fees calculation breakdown"
+    );
+
     return {
       unclaimedFeesValue,
-      unclaimedFees0: incremental0,
-      unclaimedFees1: incremental1,
+      unclaimedFees0: totalClaimable0,
+      unclaimedFees1: totalClaimable1,
     };
   } catch (error) {
     logger.warn(

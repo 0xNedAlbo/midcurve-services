@@ -12,6 +12,7 @@ import type {
     UniswapV3Position,
 } from "@midcurve/shared";
 import type { UnclaimedFeesResult } from "./helpers/uniswapv3/position-calculations.js";
+import { calculateUnclaimedFees } from "./helpers/uniswapv3/position-calculations.js";
 import type { UniswapV3Pool } from "@midcurve/shared";
 import type {
     UniswapV3PositionDiscoverInput,
@@ -2977,7 +2978,11 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
     /**
      * Calculate unclaimed fees for a position
      *
-     * Reads tick data from pool contract and calculates fee growth inside the position range.
+     * Delegates to the helper function in position-calculations.ts which implements
+     * the complete 3-part fee calculation:
+     * 1. Incremental fees (from feeGrowthInside)
+     * 2. Checkpointed fees (from tokensOwed*)
+     * 3. Principal separation (subtract uncollectedPrincipal from tokensOwed)
      *
      * @param position - Position object with config and state
      * @param pool - Pool object with current state
@@ -2987,137 +2992,13 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
         position: UniswapV3Position,
         pool: UniswapV3Pool
     ): Promise<UnclaimedFeesResult> {
-        try {
-            const { chainId, poolAddress, tickLower, tickUpper } =
-                position.config;
-            const {
-                liquidity,
-                feeGrowthInside0LastX128,
-                feeGrowthInside1LastX128,
-            } = position.state;
-
-            // If no liquidity, no fees
-            if (liquidity === 0n) {
-                return {
-                    unclaimedFeesValue: 0n,
-                    unclaimedFees0: 0n,
-                    unclaimedFees1: 0n,
-                };
-            }
-
-            const client = this.evmConfig.getPublicClient(chainId);
-
-            // Read pool global fee growth and tick data
-            const [
-                feeGrowthGlobal0X128,
-                feeGrowthGlobal1X128,
-                tickDataLower,
-                tickDataUpper,
-            ] = await Promise.all([
-                client.readContract({
-                    address: poolAddress as Address,
-                    abi: uniswapV3PoolAbi,
-                    functionName: "feeGrowthGlobal0X128",
-                }) as Promise<bigint>,
-                client.readContract({
-                    address: poolAddress as Address,
-                    abi: uniswapV3PoolAbi,
-                    functionName: "feeGrowthGlobal1X128",
-                }) as Promise<bigint>,
-                client.readContract({
-                    address: poolAddress as Address,
-                    abi: uniswapV3PoolAbi,
-                    functionName: "ticks",
-                    args: [tickLower],
-                }) as Promise<
-                    readonly [
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        number,
-                        boolean
-                    ]
-                >,
-                client.readContract({
-                    address: poolAddress as Address,
-                    abi: uniswapV3PoolAbi,
-                    functionName: "ticks",
-                    args: [tickUpper],
-                }) as Promise<
-                    readonly [
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        bigint,
-                        number,
-                        boolean
-                    ]
-                >,
-            ]);
-
-            // Extract feeGrowthOutside from tick data
-            const feeGrowthOutsideLower0X128 = tickDataLower[2];
-            const feeGrowthOutsideLower1X128 = tickDataLower[3];
-            const feeGrowthOutsideUpper0X128 = tickDataUpper[2];
-            const feeGrowthOutsideUpper1X128 = tickDataUpper[3];
-
-            // Calculate fee growth inside using pool's current tick
-            const feeGrowthInside = computeFeeGrowthInside(
-                pool.state.currentTick,
-                tickLower,
-                tickUpper,
-                feeGrowthGlobal0X128,
-                feeGrowthGlobal1X128,
-                feeGrowthOutsideLower0X128,
-                feeGrowthOutsideLower1X128,
-                feeGrowthOutsideUpper0X128,
-                feeGrowthOutsideUpper1X128
-            );
-
-            // Calculate incremental fees (fees earned since last checkpoint)
-            const incremental0 = calculateIncrementalFees(
-                feeGrowthInside.inside0,
-                feeGrowthInside0LastX128,
-                liquidity
-            );
-            const incremental1 = calculateIncrementalFees(
-                feeGrowthInside.inside1,
-                feeGrowthInside1LastX128,
-                liquidity
-            );
-
-            // Convert to quote token value using the correct utility function
-            // This handles precision properly by scaling before dividing
-            const unclaimedFeesValue = calculateTokenValueInQuote(
-                incremental0,
-                incremental1,
-                pool.state.sqrtPriceX96,
-                position.isToken0Quote,
-                pool.token0.decimals,
-                pool.token1.decimals
-            );
-
-            return {
-                unclaimedFeesValue,
-                unclaimedFees0: incremental0,
-                unclaimedFees1: incremental1,
-            };
-        } catch (error) {
-            this.logger.warn(
-                { error, positionId: position.id },
-                "Failed to calculate unclaimed fees, using 0"
-            );
-            return {
-                unclaimedFeesValue: 0n,
-                unclaimedFees0: 0n,
-                unclaimedFees1: 0n,
-            };
-        }
+        return calculateUnclaimedFees(
+            position,
+            pool,
+            this.evmConfig,
+            this.ledgerService,
+            this.logger
+        );
     }
 
     /**
