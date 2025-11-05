@@ -107,6 +107,18 @@ export async function getLedgerSummary(
 }
 
 /**
+ * Result of unclaimed fees calculation
+ */
+export interface UnclaimedFeesResult {
+  /** Total unclaimed fees in quote token value */
+  unclaimedFeesValue: bigint;
+  /** Unclaimed fees in token0 (incremental + checkpointed) */
+  unclaimedFees0: bigint;
+  /** Unclaimed fees in token1 (incremental + checkpointed) */
+  unclaimedFees1: bigint;
+}
+
+/**
  * Calculate unclaimed fees for a position
  *
  * Reads tick data from pool contract and calculates fee growth inside the position range.
@@ -115,14 +127,14 @@ export async function getLedgerSummary(
  * @param pool - Pool object with current state
  * @param evmConfig - EVM config for RPC access
  * @param logger - Logger instance for warnings
- * @returns Unclaimed fees in quote token value
+ * @returns Object containing quote-denominated total and individual token amounts
  */
 export async function calculateUnclaimedFees(
   position: UniswapV3Position,
   pool: UniswapV3Pool,
   evmConfig: EvmConfig,
   logger: Logger
-): Promise<bigint> {
+): Promise<UnclaimedFeesResult> {
   try {
     const { chainId, poolAddress, tickLower, tickUpper } =
       position.config;
@@ -134,7 +146,11 @@ export async function calculateUnclaimedFees(
 
     // If no liquidity, no fees
     if (liquidity === 0n) {
-      return 0n;
+      return {
+        unclaimedFeesValue: 0n,
+        unclaimedFees0: 0n,
+        unclaimedFees1: 0n,
+      };
     }
 
     const client = evmConfig.getPublicClient(chainId);
@@ -234,13 +250,21 @@ export async function calculateUnclaimedFees(
       pool.token1.decimals
     );
 
-    return unclaimedFeesValue;
+    return {
+      unclaimedFeesValue,
+      unclaimedFees0: incremental0,
+      unclaimedFees1: incremental1,
+    };
   } catch (error) {
     logger.warn(
       { error, positionId: position.id },
       "Failed to calculate unclaimed fees, using 0"
     );
-    return 0n;
+    return {
+      unclaimedFeesValue: 0n,
+      unclaimedFees0: 0n,
+      unclaimedFees1: 0n,
+    };
   }
 }
 

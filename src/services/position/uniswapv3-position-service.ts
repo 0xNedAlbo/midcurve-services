@@ -11,6 +11,7 @@ import type {
     UniswapV3PositionState,
     UniswapV3Position,
 } from "@midcurve/shared";
+import type { UnclaimedFeesResult } from "./helpers/uniswapv3/position-calculations.js";
 import type { UniswapV3Pool } from "@midcurve/shared";
 import type {
     UniswapV3PositionDiscoverInput,
@@ -298,6 +299,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
             feeGrowthInside1LastX128: string;
             tokensOwed0: string;
             tokensOwed1: string;
+            unclaimedFees0?: string;
+            unclaimedFees1?: string;
         };
 
         return {
@@ -307,6 +310,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
             feeGrowthInside1LastX128: BigInt(db.feeGrowthInside1LastX128),
             tokensOwed0: BigInt(db.tokensOwed0),
             tokensOwed1: BigInt(db.tokensOwed1),
+            unclaimedFees0: BigInt(db.unclaimedFees0 ?? '0'),
+            unclaimedFees1: BigInt(db.unclaimedFees1 ?? '0'),
         };
     }
 
@@ -326,6 +331,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
             feeGrowthInside1LastX128: state.feeGrowthInside1LastX128.toString(),
             tokensOwed0: state.tokensOwed0.toString(),
             tokensOwed1: state.tokensOwed1.toString(),
+            unclaimedFees0: state.unclaimedFees0?.toString() ?? '0',
+            unclaimedFees1: state.unclaimedFees1?.toString() ?? '0',
         };
     }
 
@@ -725,6 +732,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 feeGrowthInside1LastX128: position.feeGrowthInside1LastX128,
                 tokensOwed0: position.tokensOwed0,
                 tokensOwed1: position.tokensOwed1,
+                unclaimedFees0: 0n, // Will be calculated after position creation
+                unclaimedFees1: 0n,
             };
 
             this.logger.debug(
@@ -865,10 +874,21 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 const unrealizedPnl = currentValue - ledgerSummary.costBasis;
 
                 // Calculate unclaimed fees
-                const unClaimedFees = await this.calculateUnclaimedFees(
+                const fees = await this.calculateUnclaimedFees(
                     createdPosition,
                     pool
                 );
+
+                // Update position state with individual fee amounts
+                createdPosition.state.unclaimedFees0 = fees.unclaimedFees0;
+                createdPosition.state.unclaimedFees1 = fees.unclaimedFees1;
+
+                // Serialize and save updated state
+                const stateDB = this.serializeState(createdPosition.state);
+                await this.prisma.position.update({
+                    where: { id: createdPosition.id },
+                    data: { state: stateDB as object },
+                });
 
                 // Calculate price range
                 const { priceRangeLower, priceRangeUpper } =
@@ -881,7 +901,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     realizedPnl: ledgerSummary.realizedPnl,
                     unrealizedPnl,
                     collectedFees: ledgerSummary.collectedFees,
-                    unClaimedFees,
+                    unClaimedFees: fees.unclaimedFeesValue,
                     lastFeesCollectedAt:
                         ledgerSummary.lastFeesCollectedAt.getTime() === 0
                             ? createdPosition.positionOpenedAt
@@ -1171,6 +1191,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     feeGrowthInside1LastX128: positionData[9],
                     tokensOwed0: positionData[10],
                     tokensOwed1: positionData[11],
+                    unclaimedFees0: 0n, // Will be calculated later
+                    unclaimedFees1: 0n,
                 };
 
                 this.logger.debug(
@@ -1386,10 +1408,21 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     const unrealizedPnl = currentValue - ledgerSummary.costBasis;
 
                     // Calculate unclaimed fees
-                    const unClaimedFees = await this.calculateUnclaimedFees(
+                    const fees = await this.calculateUnclaimedFees(
                         syncedPosition,
                         pool
                     );
+
+                    // Update position state with individual fee amounts
+                    syncedPosition.state.unclaimedFees0 = fees.unclaimedFees0;
+                    syncedPosition.state.unclaimedFees1 = fees.unclaimedFees1;
+
+                    // Serialize and save updated state
+                    const feeStateDB = this.serializeState(syncedPosition.state);
+                    await this.prisma.position.update({
+                        where: { id },
+                        data: { state: feeStateDB as object },
+                    });
 
                     // Calculate price range
                     const { priceRangeLower, priceRangeUpper } =
@@ -1402,7 +1435,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         realizedPnl: ledgerSummary.realizedPnl,
                         unrealizedPnl,
                         collectedFees: ledgerSummary.collectedFees,
-                        unClaimedFees,
+                        unClaimedFees: fees.unclaimedFeesValue,
                         lastFeesCollectedAt:
                             ledgerSummary.lastFeesCollectedAt.getTime() === 0
                                 ? syncedPosition.positionOpenedAt
@@ -1417,7 +1450,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                             currentValue: currentValue.toString(),
                             costBasis: ledgerSummary.costBasis.toString(),
                             unrealizedPnl: unrealizedPnl.toString(),
-                            unClaimedFees: unClaimedFees.toString(),
+                            unClaimedFees: fees.unclaimedFeesValue.toString(),
                         },
                         "Position values calculated and updated after missing events sync"
                     );
@@ -1704,10 +1737,21 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
             const unrealizedPnl = currentValue - ledgerSummary.costBasis;
 
             // Calculate unclaimed fees with refreshed state
-            const unClaimedFees = await this.calculateUnclaimedFees(
+            const fees = await this.calculateUnclaimedFees(
                 refreshedPosition,
                 pool
             );
+
+            // Update position state with individual fee amounts
+            refreshedPosition.state.unclaimedFees0 = fees.unclaimedFees0;
+            refreshedPosition.state.unclaimedFees1 = fees.unclaimedFees1;
+
+            // Serialize and save updated state
+            const feeUpdatedStateDB = this.serializeState(refreshedPosition.state);
+            await this.prisma.position.update({
+                where: { id },
+                data: { state: feeUpdatedStateDB as object },
+            });
 
             // Price range is immutable, but recalculate for completeness
             const { priceRangeLower, priceRangeUpper } =
@@ -1720,7 +1764,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 realizedPnl: ledgerSummary.realizedPnl,
                 unrealizedPnl,
                 collectedFees: ledgerSummary.collectedFees,
-                unClaimedFees,
+                unClaimedFees: fees.unclaimedFeesValue,
                 lastFeesCollectedAt:
                     ledgerSummary.lastFeesCollectedAt.getTime() === 0
                         ? refreshedPosition.positionOpenedAt
@@ -1734,7 +1778,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     positionId: id,
                     currentValue: currentValue.toString(),
                     unrealizedPnl: unrealizedPnl.toString(),
-                    unClaimedFees: unClaimedFees.toString(),
+                    unClaimedFees: fees.unclaimedFeesValue.toString(),
                 },
                 "Position common fields recalculated and updated"
             );
@@ -2294,6 +2338,8 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 feeGrowthInside1LastX128: feeGrowthInside.inside1, // Checkpoint at creation
                 tokensOwed0: 0n, // New position
                 tokensOwed1: 0n, // New position
+                unclaimedFees0: 0n, // Will be calculated after position creation
+                unclaimedFees1: 0n,
             };
 
             this.logger.debug(
@@ -2935,12 +2981,12 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
      *
      * @param position - Position object with config and state
      * @param pool - Pool object with current state
-     * @returns Unclaimed fees in quote token value
+     * @returns Unclaimed fees result with quote value and individual token amounts
      */
     private async calculateUnclaimedFees(
         position: UniswapV3Position,
         pool: UniswapV3Pool
-    ): Promise<bigint> {
+    ): Promise<UnclaimedFeesResult> {
         try {
             const { chainId, poolAddress, tickLower, tickUpper } =
                 position.config;
@@ -2952,7 +2998,11 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
 
             // If no liquidity, no fees
             if (liquidity === 0n) {
-                return 0n;
+                return {
+                    unclaimedFeesValue: 0n,
+                    unclaimedFees0: 0n,
+                    unclaimedFees1: 0n,
+                };
             }
 
             const client = this.evmConfig.getPublicClient(chainId);
@@ -3052,13 +3102,21 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 pool.token1.decimals
             );
 
-            return unclaimedFeesValue;
+            return {
+                unclaimedFeesValue,
+                unclaimedFees0: incremental0,
+                unclaimedFees1: incremental1,
+            };
         } catch (error) {
             this.logger.warn(
                 { error, positionId: position.id },
                 "Failed to calculate unclaimed fees, using 0"
             );
-            return 0n;
+            return {
+                unclaimedFeesValue: 0n,
+                unclaimedFees0: 0n,
+                unclaimedFees1: 0n,
+            };
         }
     }
 

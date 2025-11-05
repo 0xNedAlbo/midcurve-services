@@ -147,6 +147,8 @@ export const ACTIVE_POSITION_STATE: UniswapV3PositionState = {
   feeGrowthInside1LastX128: 987654321098765432109876543210n,
   tokensOwed0: 500000n, // 0.5 USDC
   tokensOwed1: 100000000000000000n, // 0.1 WETH
+  unclaimedFees0: 500000n, // 0.5 USDC
+  unclaimedFees1: 100000000000000000n, // 0.1 WETH
 };
 
 export const ZERO_POSITION_STATE: UniswapV3PositionState = {
@@ -156,6 +158,8 @@ export const ZERO_POSITION_STATE: UniswapV3PositionState = {
   feeGrowthInside1LastX128: 0n,
   tokensOwed0: 0n,
   tokensOwed1: 0n,
+  unclaimedFees0: 0n,
+  unclaimedFees1: 0n,
 };
 
 // ============================================================================
@@ -362,6 +366,8 @@ export const BOB_POSITION: PositionFixture = {
       feeGrowthInside1LastX128: 222222222222222222222222222222n,
       tokensOwed0: 200000n,
       tokensOwed1: 50000000000000000n,
+      unclaimedFees0: 200000n,
+      unclaimedFees1: 50000000000000000n,
     },
   },
   dbResult: {
@@ -438,6 +444,8 @@ export const BOB_POSITION: PositionFixture = {
       feeGrowthInside1LastX128: 222222222222222222222222222222n,
       tokensOwed0: 200000n,
       tokensOwed1: 50000000000000000n,
+      unclaimedFees0: 200000n,
+      unclaimedFees1: 50000000000000000n,
     },
   },
 };
