@@ -43,7 +43,6 @@ import { UniswapV3PoolPriceService } from "../pool-price/uniswapv3-pool-price-se
 import type { Address } from "viem";
 import {
     computeFeeGrowthInside,
-    calculateIncrementalFees,
 } from "@midcurve/shared";
 import { calculatePositionValue } from "@midcurve/shared";
 import { tickToPrice } from "@midcurve/shared";
@@ -1353,6 +1352,101 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
 
                             // Update in-memory object
                             syncedPosition.state.liquidity = ledgerLiquidity;
+                        }
+
+                        // ========================================================================
+                        // COLLECT EVENT CHECKPOINT REFRESH
+                        // ========================================================================
+                        // If a COLLECT event was synced, the on-chain feeGrowthInside*LastX128
+                        // values have been updated by the Uniswap contract. We need to refresh
+                        // these checkpoint values from on-chain to prevent double-counting fees
+                        // in the unclaimed fees calculation.
+                        // ========================================================================
+
+                        const hasRecentCollect = lastLedgerEvent && lastLedgerEvent.eventType === 'COLLECT';
+
+                        if (hasRecentCollect) {
+                            this.logger.info(
+                                {
+                                    id,
+                                    collectTimestamp: lastLedgerEvent!.timestamp.toISOString(),
+                                },
+                                "COLLECT event detected - refreshing fee growth checkpoints from on-chain"
+                            );
+
+                            // Re-read position state from blockchain to get updated checkpoints
+                            const positionManagerAddress = getPositionManagerAddress(chainId);
+                            const client = this.evmConfig.getPublicClient(chainId);
+
+                            const [freshPositionData] = await Promise.all([
+                                client.readContract({
+                                    address: positionManagerAddress,
+                                    abi: UNISWAP_V3_POSITION_MANAGER_ABI,
+                                    functionName: "positions",
+                                    args: [BigInt(nftId)],
+                                }) as Promise<
+                                    readonly [
+                                        bigint, // nonce
+                                        Address, // operator
+                                        Address, // token0
+                                        Address, // token1
+                                        number, // fee
+                                        number, // tickLower
+                                        number, // tickUpper
+                                        bigint, // liquidity
+                                        bigint, // feeGrowthInside0LastX128
+                                        bigint, // feeGrowthInside1LastX128
+                                        bigint, // tokensOwed0
+                                        bigint // tokensOwed1
+                                    ]
+                                >,
+                            ]);
+
+                            this.logger.debug(
+                                {
+                                    id,
+                                    oldCheckpoint0: syncedPosition.state.feeGrowthInside0LastX128.toString(),
+                                    newCheckpoint0: freshPositionData[8].toString(),
+                                    oldCheckpoint1: syncedPosition.state.feeGrowthInside1LastX128.toString(),
+                                    newCheckpoint1: freshPositionData[9].toString(),
+                                    oldTokensOwed0: syncedPosition.state.tokensOwed0.toString(),
+                                    newTokensOwed0: freshPositionData[10].toString(),
+                                    oldTokensOwed1: syncedPosition.state.tokensOwed1.toString(),
+                                    newTokensOwed1: freshPositionData[11].toString(),
+                                },
+                                "Fee growth checkpoints comparison (old vs new)"
+                            );
+
+                            // Update position state with fresh checkpoint values
+                            const refreshedState: UniswapV3PositionState = {
+                                ...syncedPosition.state,
+                                feeGrowthInside0LastX128: freshPositionData[8],
+                                feeGrowthInside1LastX128: freshPositionData[9],
+                                tokensOwed0: freshPositionData[10],
+                                tokensOwed1: freshPositionData[11],
+                            };
+
+                            // Serialize state for database
+                            const refreshedStateDB = this.serializeState(refreshedState);
+
+                            // Update position state in database
+                            await this.prisma.position.update({
+                                where: { id },
+                                data: {
+                                    state: refreshedStateDB as object,
+                                },
+                            });
+
+                            // Update in-memory object
+                            syncedPosition.state.feeGrowthInside0LastX128 = freshPositionData[8];
+                            syncedPosition.state.feeGrowthInside1LastX128 = freshPositionData[9];
+                            syncedPosition.state.tokensOwed0 = freshPositionData[10];
+                            syncedPosition.state.tokensOwed1 = freshPositionData[11];
+
+                            this.logger.info(
+                                { id },
+                                "Fee growth checkpoints refreshed successfully after COLLECT"
+                            );
                         }
 
                         // ========================================================================
@@ -2925,7 +3019,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                     costBasis: 0n,
                     realizedPnl: 0n,
                     collectedFees: 0n,
-                    lastFeesCollectedAt: new Date(), // Will be set to positionOpenedAt by caller
+                    lastFeesCollectedAt: new Date(0), // Epoch time signals no collections yet
                 };
             }
 
@@ -2959,7 +3053,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 costBasis: latestEvent.costBasisAfter,
                 realizedPnl: latestEvent.pnlAfter,
                 collectedFees,
-                lastFeesCollectedAt: lastFeesCollectedAt ?? new Date(),
+                lastFeesCollectedAt: lastFeesCollectedAt ?? new Date(0), // Epoch time signals no collections yet
             };
         } catch (error) {
             this.logger.warn(
@@ -2970,7 +3064,7 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 costBasis: 0n,
                 realizedPnl: 0n,
                 collectedFees: 0n,
-                lastFeesCollectedAt: new Date(),
+                lastFeesCollectedAt: new Date(0), // Epoch time signals no collections yet
             };
         }
     }
