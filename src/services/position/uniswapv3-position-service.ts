@@ -1291,11 +1291,22 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                         );
                     }
 
-                    const pool = syncedPosition.pool;
+                    // Refresh pool state to ensure accurate current price for calculations
+                    this.logger.debug(
+                        { poolId: syncedPosition.pool.id },
+                        "Refreshing pool state to get current sqrtPriceX96 and tick"
+                    );
+
+                    const pool = await this.poolService.refresh(syncedPosition.pool.id);
 
                     this.logger.debug(
-                        { id },
-                        "Position re-fetched after missing events sync - proceeding to value calculation"
+                        {
+                            id,
+                            poolId: pool.id,
+                            sqrtPriceX96: pool.state.sqrtPriceX96.toString(),
+                            currentTick: pool.state.currentTick
+                        },
+                        "Position re-fetched after missing events sync, pool state refreshed - proceeding to value calculation"
                     );
 
                     // ========================================================================
@@ -1816,8 +1827,22 @@ export class UniswapV3PositionService extends PositionService<"uniswapv3"> {
                 "Recalculating position common fields"
             );
 
-            // Use embedded pool object from position
-            const pool = refreshedPosition.pool;
+            // Refresh pool state to ensure accurate current price for calculations
+            this.logger.debug(
+                { poolId: refreshedPosition.pool.id },
+                "Refreshing pool state to get current sqrtPriceX96 and tick"
+            );
+
+            const pool = await this.poolService.refresh(refreshedPosition.pool.id);
+
+            this.logger.debug(
+                {
+                    poolId: pool.id,
+                    sqrtPriceX96: pool.state.sqrtPriceX96.toString(),
+                    currentTick: pool.state.currentTick
+                },
+                "Pool state refreshed with current on-chain price"
+            );
 
             // Get ledger summary (cost basis, realized PnL, fees)
             const ledgerSummary = await this.getLedgerSummary(id);
