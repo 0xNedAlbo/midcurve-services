@@ -24,7 +24,7 @@ import type { AnyLedgerEvent } from '@midcurve/shared';
 import {
   calculateAprBps,
   calculateDurationSeconds,
-  calculateAverageCostBasis,
+  calculateTimeWeightedCostBasis,
 } from '../../utils/apr/apr-calculations.js';
 import { createServiceLogger, log } from '../../logging/index.js';
 import type { ServiceLogger } from '../../logging/index.js';
@@ -376,9 +376,10 @@ export class PositionAprService {
     const startTimestamp = startEvent.timestamp;
     const endTimestamp = endEvent.timestamp;
 
-    // Average cost basis across all events in period
-    const costBasisValues = events.map((e) => e.costBasisAfter);
-    const costBasis = calculateAverageCostBasis(costBasisValues);
+    // Time-weighted average cost basis across all events in period
+    // This accounts for how long each cost basis was active, providing
+    // more accurate APR calculations when positions have multiple INCREASE/DECREASE events
+    const costBasis = calculateTimeWeightedCostBasis(events);
 
     // Sum of fees collected from COLLECT events
     const collectedFeeValue = events

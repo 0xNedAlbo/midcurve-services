@@ -190,6 +190,88 @@ export function calculateAverageCostBasis(costBasisValues: bigint[]): bigint {
   return sum / BigInt(costBasisValues.length);
 }
 
+/**
+ * Calculate time-weighted average cost basis from ledger events
+ *
+ * Weights each cost basis by the duration it was active, providing a more accurate
+ * representation of capital deployed over time than a simple average.
+ *
+ * Algorithm:
+ * 1. For each event, calculate duration until next event
+ * 2. Weight cost basis by this duration: costBasis × duration
+ * 3. Sum all weighted values
+ * 4. Divide by total duration
+ *
+ * @param events - Array of ledger events with timestamps and cost basis (chronological order)
+ * @returns Time-weighted average cost basis
+ * @throws Error if array is empty, events span zero time, or events not chronological
+ *
+ * @example
+ * ```typescript
+ * // Position has 1,000 USDC for 10 days, then 5,000 USDC for 2 days
+ * const events = [
+ *   { timestamp: new Date('2024-01-01'), costBasisAfter: 1000_000000n },
+ *   { timestamp: new Date('2024-01-11'), costBasisAfter: 5000_000000n },
+ *   { timestamp: new Date('2024-01-13'), costBasisAfter: 5000_000000n },
+ * ];
+ * const timeWeighted = calculateTimeWeightedCostBasis(events);
+ * // Returns: 1666_666666n (1,666.67 USDC)
+ * // Calculation: (1,000 × 10 + 5,000 × 2) / 12 = 1,666.67
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Single event - no duration to weight by
+ * const events = [
+ *   { timestamp: new Date('2024-01-01'), costBasisAfter: 1000_000000n },
+ * ];
+ * const timeWeighted = calculateTimeWeightedCostBasis(events);
+ * // Returns: 1000_000000n (same as input)
+ * ```
+ */
+export function calculateTimeWeightedCostBasis(
+  events: Array<{ timestamp: Date; costBasisAfter: bigint }>
+): bigint {
+  if (events.length === 0) {
+    throw new Error('Cannot calculate time-weighted average from empty array');
+  }
+
+  // Single event: return its cost basis (no duration to weight by)
+  if (events.length === 1) {
+    return events[0]!.costBasisAfter;
+  }
+
+  // Calculate weighted sum: sum of (costBasis × duration)
+  let weightedSum = 0n;
+  let totalDurationMs = 0;
+
+  for (let i = 0; i < events.length - 1; i++) {
+    const currentEvent = events[i]!;
+    const nextEvent = events[i + 1]!;
+
+    const durationMs =
+      nextEvent.timestamp.getTime() - currentEvent.timestamp.getTime();
+
+    if (durationMs < 0) {
+      throw new Error('Events must be in chronological order');
+    }
+
+    // Weight this cost basis by its duration
+    // costBasis is in token units (e.g., 1000_000000n for 1000 USDC)
+    // duration is in milliseconds
+    // We multiply in BigInt to avoid overflow
+    weightedSum += currentEvent.costBasisAfter * BigInt(durationMs);
+    totalDurationMs += durationMs;
+  }
+
+  if (totalDurationMs === 0) {
+    throw new Error('Events must span non-zero time for time-weighted average');
+  }
+
+  // Return weighted average: sum(costBasis × duration) / totalDuration
+  return weightedSum / BigInt(totalDurationMs);
+}
+
 // ============================================================================
 // APR TO PERCENTAGE CONVERSION
 // ============================================================================

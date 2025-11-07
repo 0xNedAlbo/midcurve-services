@@ -11,6 +11,7 @@ import {
   calculateDurationSeconds,
   secondsToDays,
   calculateAverageCostBasis,
+  calculateTimeWeightedCostBasis,
   aprBpsToPercent,
   aprPercentToBps,
   SECONDS_PER_YEAR,
@@ -291,6 +292,162 @@ describe('APR Calculations', () => {
       expect(aprPercentToBps(26.09)).toBe(2609);
       expect(aprPercentToBps(26.094)).toBe(2609);
       expect(aprPercentToBps(26.095)).toBe(2610);
+    });
+  });
+
+  describe('calculateTimeWeightedCostBasis', () => {
+    it('should return cost basis for single event', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 10000_000000n,
+        },
+      ];
+
+      const result = calculateTimeWeightedCostBasis(events);
+
+      expect(result).toBe(10000_000000n);
+    });
+
+    it('should calculate weighted average for two events with equal durations', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 1000_000000n, // 1,000 USDC for 10 days
+        },
+        {
+          timestamp: new Date('2024-01-11T00:00:00Z'),
+          costBasisAfter: 3000_000000n, // 3,000 USDC for 10 days
+        },
+        {
+          timestamp: new Date('2024-01-21T00:00:00Z'),
+          costBasisAfter: 3000_000000n, // End of period
+        },
+      ];
+
+      const result = calculateTimeWeightedCostBasis(events);
+
+      // (1,000 × 10 + 3,000 × 10) / 20 = 2,000 USDC
+      expect(result).toBe(2000_000000n);
+    });
+
+    it('should calculate weighted average for events with unequal durations', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 1000_000000n, // 1,000 USDC for 10 days
+        },
+        {
+          timestamp: new Date('2024-01-11T00:00:00Z'),
+          costBasisAfter: 5000_000000n, // 5,000 USDC for 2 days
+        },
+        {
+          timestamp: new Date('2024-01-13T00:00:00Z'),
+          costBasisAfter: 5000_000000n, // End of period
+        },
+      ];
+
+      const result = calculateTimeWeightedCostBasis(events);
+
+      // Total duration: 12 days
+      // (1,000 × 10 + 5,000 × 2) / 12 = 20,000 / 12 = 1,666.67 USDC
+      expect(result).toBe(1666_666666n);
+    });
+
+    it('should handle realistic scenario with INCREASE events', () => {
+      // Scenario: Position starts with 1,999 USDC, then increases by 4,999 USDC after 0.8 days
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 1999_000000n, // 1,999 USDC
+        },
+        {
+          timestamp: new Date('2024-01-01T19:12:00Z'), // 0.8 days later
+          costBasisAfter: 6998_000000n, // 1,999 + 4,999 = 6,998 USDC
+        },
+        {
+          timestamp: new Date('2024-01-01T21:36:00Z'), // 0.1 days later (total 0.9 days)
+          costBasisAfter: 6998_000000n, // COLLECT event, cost basis unchanged
+        },
+      ];
+
+      const result = calculateTimeWeightedCostBasis(events);
+
+      // Duration 1: 0.8 days (1,999 USDC)
+      // Duration 2: 0.1 days (6,998 USDC)
+      // (1,999 × 0.8 + 6,998 × 0.1) / 0.9 = (1,599.2 + 699.8) / 0.9 = 2,554.44 USDC
+      // In milliseconds: (1,999_000000 × 69,120,000 + 6,998_000000 × 8,640,000) / 77,760,000
+      const duration1Ms = 19.2 * 60 * 60 * 1000; // 0.8 days in ms
+      const duration2Ms = 2.4 * 60 * 60 * 1000; // 0.1 days in ms
+      const totalMs = duration1Ms + duration2Ms;
+      const expected =
+        (1999_000000n * BigInt(Math.floor(duration1Ms)) +
+          6998_000000n * BigInt(Math.floor(duration2Ms))) /
+        BigInt(Math.floor(totalMs));
+
+      expect(result).toBe(expected);
+    });
+
+    it('should throw error for empty array', () => {
+      expect(() => calculateTimeWeightedCostBasis([])).toThrow(
+        'Cannot calculate time-weighted average from empty array'
+      );
+    });
+
+    it('should throw error for non-chronological events', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-11T00:00:00Z'),
+          costBasisAfter: 3000_000000n,
+        },
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'), // Earlier than previous
+          costBasisAfter: 1000_000000n,
+        },
+      ];
+
+      expect(() => calculateTimeWeightedCostBasis(events)).toThrow(
+        'Events must be in chronological order'
+      );
+    });
+
+    it('should throw error for zero duration', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 1000_000000n,
+        },
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'), // Same timestamp
+          costBasisAfter: 2000_000000n,
+        },
+      ];
+
+      expect(() => calculateTimeWeightedCostBasis(events)).toThrow(
+        'Events must span non-zero time for time-weighted average'
+      );
+    });
+
+    it('should handle very large cost basis values', () => {
+      const events = [
+        {
+          timestamp: new Date('2024-01-01T00:00:00Z'),
+          costBasisAfter: 1000000_000000n, // 1M USDC for 10 days
+        },
+        {
+          timestamp: new Date('2024-01-11T00:00:00Z'),
+          costBasisAfter: 2000000_000000n, // 2M USDC for 10 days
+        },
+        {
+          timestamp: new Date('2024-01-21T00:00:00Z'),
+          costBasisAfter: 2000000_000000n,
+        },
+      ];
+
+      const result = calculateTimeWeightedCostBasis(events);
+
+      // (1M × 10 + 2M × 10) / 20 = 1.5M USDC
+      expect(result).toBe(1500000_000000n);
     });
   });
 
