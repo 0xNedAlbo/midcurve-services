@@ -1,0 +1,1 @@
+{"version":3,"file":"erc20-abi.d.ts","sourceRoot":"","sources":["../../../src/utils/evm/erc20-abi.ts"],"names":[],"mappings":"AAcA,eAAO,MAAM,QAAQ;;;;;;;;;;;;;;;;;;;;;;;;EAsBX,CAAC;AAKX,MAAM,WAAW,aAAa;IAC5B,IAAI,EAAE,MAAM,CAAC;IACb,MAAM,EAAE,MAAM,CAAC;IACf,QAAQ,EAAE,MAAM,CAAC;CAClB"}
