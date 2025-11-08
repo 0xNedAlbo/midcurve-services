@@ -48,3 +48,4 @@ temp/
 # yalc local npm repo
 .yalc/
 yalc.lock
+dist/

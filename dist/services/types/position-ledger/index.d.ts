@@ -1,2 +1,0 @@
-export type { CreatePositionLedgerEventInput, CreateUniswapV3LedgerEventInput, CreateAnyLedgerEventInput, UniswapV3LedgerEventDiscoverInput, PositionLedgerEventDiscoverInputMap, PositionLedgerEventDiscoverInput, UniswapV3EventDiscoverInput, AnyLedgerEventDiscoverInput, } from './position-ledger-event-input.js';
-//# sourceMappingURL=index.d.ts.map

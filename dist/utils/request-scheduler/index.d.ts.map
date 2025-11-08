@@ -1,1 +1,0 @@
-{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/utils/request-scheduler/index.ts"],"names":[],"mappings":"AAOA,OAAO,EAAE,gBAAgB,EAAE,MAAM,wBAAwB,CAAC;AAC1D,YAAY,EAAE,uBAAuB,EAAE,MAAM,wBAAwB,CAAC;AAEtE,OAAO,EACL,WAAW,EACX,mBAAmB,EACnB,QAAQ,GACT,MAAM,oBAAoB,CAAC;AAC5B,YAAY,EAAE,YAAY,EAAE,MAAM,oBAAoB,CAAC"}
